@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "synapseos3"
+name = "synapseos"
 version = "0.1.0"
 description = "Domain-agnostic knowledge operating system — bootstrap ontologies from documents, extract knowledge graphs, answer multi-hop reasoning questions"
 requires-python = ">=3.11"

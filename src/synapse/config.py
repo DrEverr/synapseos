@@ -1,4 +1,4 @@
-"""SynapseOS3 configuration — Settings + SQLite-backed OntologyRegistry.
+"""SynapseOS configuration — Settings + SQLite-backed OntologyRegistry.
 
 The OntologyRegistry reads entity/relationship types from the InstanceStore (SQLite).
 Before bootstrap, it falls back to a minimal base ontology from YAML.
@@ -23,7 +23,7 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 
 
 class Settings(BaseSettings):
-    """Global SynapseOS3 settings loaded from environment / .env file."""
+    """Global SynapseOS settings loaded from environment / .env file."""
 
     model_config = SettingsConfigDict(
         env_file=".env",

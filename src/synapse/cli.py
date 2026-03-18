@@ -1,4 +1,4 @@
-"""CLI entry points for SynapseOS3: init, ingest, chat, inspect, status."""
+"""CLI entry points for SynapseOS: init, ingest, chat, inspect, status."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def setup_logging(level: str = "INFO") -> None:
 @click.option("--log-level", default=None, help="Logging level")
 @click.pass_context
 def main(ctx: click.Context, log_level: str | None) -> None:
-    """SynapseOS3 — Domain-Agnostic Knowledge Operating System.
+    """SynapseOS — Domain-Agnostic Knowledge Operating System.
 
     \b
     Lifecycle:
@@ -257,7 +257,7 @@ def chat(ctx: click.Context, query: str | None, verbose: bool) -> None:
         )
         click.echo(f"\nAnswer: {answer}")
     else:
-        click.echo(f"SynapseOS3 Chat — {domain} ({node_count} nodes)")
+        click.echo(f"SynapseOS Chat — {domain} ({node_count} nodes)")
         click.echo("Type 'quit' to exit.")
         click.echo("-" * 40)
         while True:
@@ -369,7 +369,7 @@ def inspect(
         return
 
     # Default overview
-    click.echo("SynapseOS3 Knowledge Graph")
+    click.echo("SynapseOS Knowledge Graph")
     click.echo("=" * 40)
     click.echo(f"Nodes: {graph.get_node_count()}")
     click.echo(f"Edges: {graph.get_edge_count()}")
@@ -507,7 +507,7 @@ def status(
         return
 
     # ── Default: general status ───────────────────────────────
-    click.echo("SynapseOS3 Instance Status")
+    click.echo("SynapseOS Instance Status")
     click.echo("=" * 40)
     click.echo(f"Instance dir: {settings.get_instance_dir()}")
     click.echo(f"Graph name: {settings.graph_name}")

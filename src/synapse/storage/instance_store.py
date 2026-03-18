@@ -1,6 +1,6 @@
 """SQLite-backed instance store — single source of truth for ontologies, prompts, and metadata.
 
-Each SynapseOS3 instance has one SQLite database that stores:
+Each SynapseOS instance has one SQLite database that stores:
 - Generated ontology (entity types + relationship types), versioned
 - Generated prompts (entity extraction, relationship extraction, reasoning, etc.), versioned
 - Bootstrap metadata (source documents, domain description, timestamps)
@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS bootstrap_sources (
 
 
 class InstanceStore:
-    """SQLite-backed storage for a single SynapseOS3 instance."""
+    """SQLite-backed storage for a single SynapseOS instance."""
 
     def __init__(self, db_path: str | Path) -> None:
         self._path = Path(db_path)

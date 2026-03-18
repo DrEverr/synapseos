@@ -1,4 +1,4 @@
-# SynapseOS3
+# SynapseOS
 
 Domain-agnostic knowledge operating system. Feed it any documents — it discovers the ontology, generates extraction prompts, builds a knowledge graph, and answers multi-hop reasoning questions. No code changes between domains.
 
@@ -33,7 +33,7 @@ Fresh clone (no ontology, no prompts)
 
 ```bash
 git clone <repo-url>
-cd synapseos3
+cd synapseos
 pip install -e .
 ```
 
