@@ -32,7 +32,7 @@ Fresh clone (no ontology, no prompts)
 ## Installation
 
 ```bash
-git clone <repo-url>
+git clone git@github.com:DrEverr/synapseos.git
 cd synapseos
 pip install -e .
 ```
