@@ -22,26 +22,36 @@ def setup_logging(level: str = "INFO") -> None:
 
 
 @click.group()
+@click.option(
+    "-g", "--graph", default=None, help="Graph/domain name (overrides SYNAPSE_GRAPH_NAME)"
+)
 @click.option("--log-level", default=None, help="Logging level")
 @click.pass_context
-def main(ctx: click.Context, log_level: str | None) -> None:
+def main(ctx: click.Context, graph: str | None, log_level: str | None) -> None:
     """SynapseOS — Domain-Agnostic Knowledge Operating System.
 
     \b
     Lifecycle:
-      1. synapse init <docs>    Bootstrap ontology & prompts from documents
-      2. synapse ingest <docs>  Extract KG using generated ontology
-      3. synapse chat            Chat with the knowledge graph
-      4. synapse ingest <more>  Grow the KG with new documents
+      1. synapse -g <domain> init <docs>    Bootstrap a new domain
+      2. synapse -g <domain> ingest <docs>  Extract KG using generated ontology
+      3. synapse -g <domain> chat           Chat with the knowledge graph
+      4. synapse -g <domain> ingest <more>  Grow the KG with new documents
 
     \b
     Management:
-      synapse status            Show instance state
-      synapse inspect            Inspect the knowledge graph
-      synapse versions          List ontology versions
+      synapse -g <domain> status            Show instance state
+      synapse -g <domain> inspect           Inspect the knowledge graph
+      synapse -g <domain> versions          List ontology versions
+
+    \b
+    The -g/--graph flag selects which domain to work with. Each domain
+    gets its own ontology, prompts, and knowledge graph. If omitted,
+    falls back to SYNAPSE_GRAPH_NAME env var (default: synapse_kg).
     """
     ctx.ensure_object(dict)
     settings = get_settings()
+    if graph:
+        settings.graph_name = graph
     if log_level:
         settings.log_level = log_level
     setup_logging(settings.log_level)
