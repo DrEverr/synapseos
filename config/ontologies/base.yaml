@@ -1,0 +1,26 @@
+# Minimal base ontology — used only as fallback before bootstrap.
+# After bootstrap, the generated ontology in SQLite takes precedence.
+entity_types:
+  CONCEPT: "A general concept, idea, or abstract entity"
+  OBJECT: "A physical object, item, or material"
+  PROPERTY: "A measurable or observable property or attribute"
+  MEASUREMENT: "A specific numeric value with units"
+  PROCESS: "A procedure, method, or sequence of steps"
+  ORGANIZATION: "A company, institution, or entity"
+  PERSON: "A named individual"
+  LOCATION: "A physical or logical location"
+  CONDITION: "An environmental, operational, or prerequisite condition"
+  CATEGORY: "A classification, type, or grouping"
+
+relationship_types:
+  HAS_PROPERTY: "Entity possesses an attribute or characteristic"
+  HAS_VALUE: "Property has a specific measured value"
+  IS_A: "Taxonomic/inheritance relationship"
+  PART_OF: "Compositional containment"
+  USES: "Utilization of a resource, tool, or material"
+  REQUIRES: "Dependency or prerequisite"
+  CAUSES: "Causal relationship"
+  BELONGS_TO_CATEGORY: "Classification membership"
+  LOCATED_IN: "Spatial relationship"
+  PRODUCED_BY: "Provenance or authorship"
+  RELATES_TO: "Generic relationship (use only as last resort)"

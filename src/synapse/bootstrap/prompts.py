@@ -1,0 +1,236 @@
+"""Predefined general prompts for the bootstrap pipeline.
+
+These are the ONLY hardcoded prompts in the system. They are domain-agnostic and
+designed to discover ontology structure from any batch of documents, then generate
+domain-specific prompts for extraction and reasoning.
+
+The bootstrap pipeline:
+1. DOMAIN_ANALYSIS — analyze sample pages to identify the field/domain
+2. ONTOLOGY_DISCOVERY — extract entity types and relationship types from the documents
+3. ONTOLOGY_REFINEMENT — merge, deduplicate, and finalize the ontology
+4. PROMPT_GENERATION — generate domain-specific prompts for entity extraction,
+   relationship extraction, reasoning, enrichment, and tree search
+"""
+
+from __future__ import annotations
+
+
+# ═══════════════════════════════════════════════════════════════
+# Step 1: Domain Analysis
+# ═══════════════════════════════════════════════════════════════
+
+DOMAIN_ANALYSIS_SYSTEM = "You are a document analysis expert. You identify the domain, field, and subject matter of documents."
+
+DOMAIN_ANALYSIS_USER = """Analyze the following sample pages from a batch of documents.
+Identify the domain, field, and key subject areas these documents cover.
+
+SAMPLE PAGES:
+{sample_text}
+
+Return a JSON object with:
+- "domain": The primary domain/field (e.g., "culinary arts", "industrial chemistry", "medicine", "law", "finance")
+- "subdomain": More specific area within the domain (e.g., "Polish cuisine", "silicone coatings", "cardiology")
+- "language": Primary language of the documents (e.g., "English", "Polish", "German")
+- "document_types": Array of document types found (e.g., ["cookbook", "recipe collection"], ["technical data sheet", "safety data sheet"])
+- "key_topics": Array of 5-10 key topics/themes found in the documents
+- "complexity": "basic", "intermediate", or "advanced" — how technical/specialized the content is
+
+Return ONLY the JSON, nothing else."""
+
+
+# ═══════════════════════════════════════════════════════════════
+# Step 2: Ontology Discovery
+# ═══════════════════════════════════════════════════════════════
+
+ONTOLOGY_DISCOVERY_SYSTEM = """You are an ontology engineering expert. You design knowledge graph schemas by analyzing domain documents.
+Your task is to identify the entity types and relationship types that would best capture the knowledge in these documents."""
+
+ONTOLOGY_DISCOVERY_USER = """Analyze these document samples and design an ontology (entity types and relationship types) for a knowledge graph.
+
+DOMAIN CONTEXT:
+{domain_context}
+
+SAMPLE PAGES:
+{sample_text}
+
+CONSTRAINTS:
+- Maximum {max_entity_types} entity types
+- Maximum {max_rel_types} relationship types
+- Entity types should be UPPERCASE_WITH_UNDERSCORES (e.g., INGREDIENT, CHEMICAL_COMPOUND)
+- Relationship types should be UPPERCASE_WITH_UNDERSCORES (e.g., HAS_PROPERTY, USES_TECHNIQUE)
+- Always include a generic RELATES_TO relationship as a last resort
+- Each type needs a clear, concise description
+
+GUIDELINES:
+- Entity types should be concrete, extractable things (nouns) — not abstract concepts
+- Relationship types should represent meaningful connections between entity types
+- Prefer specific types over generic ones (INGREDIENT over ITEM, HAS_TEMPERATURE over HAS_VALUE)
+- Think about what multi-hop queries a user would want to ask and design for those paths
+- Include types for measurable properties, conditions, and classifications
+- Include types for provenance (source documents, organizations, standards)
+
+Return a JSON object with:
+- "entity_types": object mapping TYPE_NAME to description string
+- "relationship_types": object mapping TYPE_NAME to description string
+- "reasoning": brief explanation of your design choices (2-3 sentences)
+
+Return ONLY the JSON, nothing else."""
+
+
+# ═══════════════════════════════════════════════════════════════
+# Step 2b: Ontology Discovery from additional sample batches
+# ═══════════════════════════════════════════════════════════════
+
+ONTOLOGY_DISCOVERY_INCREMENTAL_USER = """Continue analyzing more document samples. You have already discovered these types from previous samples.
+
+DOMAIN CONTEXT:
+{domain_context}
+
+EXISTING ENTITY TYPES:
+{existing_entity_types}
+
+EXISTING RELATIONSHIP TYPES:
+{existing_relationship_types}
+
+NEW SAMPLE PAGES:
+{sample_text}
+
+CONSTRAINTS:
+- Maximum {max_entity_types} entity types total (including existing)
+- Maximum {max_rel_types} relationship types total (including existing)
+- Keep ALL existing types unless they are clearly wrong
+- Add NEW types only if they capture knowledge not covered by existing types
+- Merge similar types (e.g., if you see TEMPERATURE and TEMPERATURE_RANGE, keep the more useful one)
+
+Return a JSON object with:
+- "entity_types": COMPLETE object mapping ALL type names to descriptions (existing + new)
+- "relationship_types": COMPLETE object mapping ALL type names to descriptions (existing + new)
+- "changes": brief description of what was added/changed/merged
+
+Return ONLY the JSON, nothing else."""
+
+
+# ═══════════════════════════════════════════════════════════════
+# Step 3: Ontology Refinement
+# ═══════════════════════════════════════════════════════════════
+
+ONTOLOGY_REFINEMENT_SYSTEM = (
+    "You are an ontology engineering expert. You refine and finalize knowledge graph schemas."
+)
+
+ONTOLOGY_REFINEMENT_USER = """Review and refine this ontology for a {domain} knowledge graph.
+
+ENTITY TYPES:
+{entity_types}
+
+RELATIONSHIP TYPES:
+{relationship_types}
+
+DOCUMENT TOPICS:
+{key_topics}
+
+REFINEMENT TASKS:
+1. Remove types that overlap too much — merge them into the more general one
+2. Ensure every entity type can participate in at least one relationship type
+3. Ensure relationship types cover the key multi-hop reasoning paths:
+   - Can a user trace from a specific item through intermediate concepts to reach a conclusion?
+   - Are comparison queries possible (e.g., "compare X and Y on property Z")?
+4. Add any missing types that would be critical for this domain
+5. Ensure descriptions are clear and specific enough to guide an LLM during extraction
+6. Cap at {max_entity_types} entity types and {max_rel_types} relationship types
+
+Return a JSON object with:
+- "entity_types": refined mapping of TYPE_NAME to description
+- "relationship_types": refined mapping of TYPE_NAME to description
+- "changes_made": array of strings describing each change
+
+Return ONLY the JSON, nothing else."""
+
+
+# ═══════════════════════════════════════════════════════════════
+# Step 4: Prompt Generation
+# ═══════════════════════════════════════════════════════════════
+
+PROMPT_GENERATION_SYSTEM = """You are an expert in LLM prompt engineering for knowledge extraction systems.
+You write precise, domain-specific prompts that guide an LLM to extract structured knowledge from documents."""
+
+PROMPT_GENERATION_USER = """Generate domain-specific prompts for a {domain} knowledge extraction system.
+
+ONTOLOGY:
+Entity types:
+{entity_types}
+
+Relationship types:
+{relationship_types}
+
+DOCUMENT CONTEXT:
+- Language: {language}
+- Document types: {document_types}
+- Key topics: {key_topics}
+
+Generate the following prompts as a JSON object with these keys:
+
+1. "entity_extraction_system": System prompt for entity extraction
+   - Should instruct the LLM to extract entities from a document section
+   - Must reference the entity types above
+   - Include domain-specific extraction rules (e.g., "prefer SPICE over INGREDIENT for herbs" in cooking)
+
+2. "entity_extraction_user": User prompt template for entity extraction
+   - Must contain placeholders: {{document_title}}, {{section_title}}, {{section_summary}}, {{entity_types}}, {{section_text}}
+   - Should specify JSON output format: [{{"text", "entity_type", "confidence", "properties"}}]
+
+3. "relationship_extraction_system": System prompt for relationship extraction
+   - Should instruct the LLM to extract relationships between pre-extracted entities
+   - Must reference the relationship types above
+
+4. "relationship_extraction_user": User prompt template for relationship extraction
+   - Must contain placeholders: {{document_title}}, {{section_title}}, {{section_text}}, {{entities}}, {{relationship_types}}
+   - Should specify JSON output format: [{{"subject", "predicate", "object", "confidence"}}]
+
+5. "reasoning_system": System prompt for the ReAct reasoning agent
+   - Must describe the 3 tools: GRAPH_QUERY(cypher), SECTION_TEXT(section_id), ANSWER(text)
+   - Must include Cypher syntax rules (toLower, CONTAINS, read-only)
+   - Must include 5-7 valid Cypher examples relevant to this domain
+   - Must contain placeholders: {{entity_types}}, {{relationship_types}}
+   - Must specify the Thought/Action format
+
+6. "reasoning_user": User prompt template for reasoning
+   - Must contain placeholders: {{question}}, {{section_summaries}}
+
+7. "tree_search_system": System prompt for document section retrieval
+   - Brief: "You are a [domain] document section retrieval expert."
+
+8. "tree_search_user": User prompt template for tree search
+   - Must contain placeholders: {{query}}, {{document_trees}}
+
+9. "enrichment_system": System prompt for post-answer graph enrichment
+   - Brief: "You are an expert [domain] knowledge extraction system."
+
+10. "enrichment_user": User prompt template for enrichment
+    - Must contain placeholders: {{answer_text}}, {{question}}, {{entity_types}}, {{relationship_types}}, {{existing_entities}}
+
+IMPORTANT RULES:
+- Use double curly braces for template placeholders: {{placeholder}}
+- Include domain-specific terminology and examples in all prompts
+- Prompts should be in the same language as the documents ({language})... but system instructions in English
+- The reasoning_system prompt should include domain-relevant Cypher query examples
+- All prompts should enforce structured JSON output where applicable
+
+Return the JSON object with all 10 prompt keys. Return ONLY the JSON, nothing else."""
+
+
+# ═══════════════════════════════════════════════════════════════
+# Boilerplate detection prompt (used in extraction)
+# ═══════════════════════════════════════════════════════════════
+
+BOILERPLATE_KEYWORDS_DISCOVERY_SYSTEM = "You are a document structure analyst."
+
+BOILERPLATE_KEYWORDS_DISCOVERY_USER = """Given these document types from the {domain} domain: {document_types}
+
+What section titles or keywords indicate boilerplate content that should be SKIPPED during knowledge extraction?
+(e.g., legal disclaimers, copyright notices, table of contents, indexes, author bios)
+
+Return a JSON array of lowercase keywords/phrases that indicate boilerplate sections.
+Example: ["legal", "disclaimer", "copyright", "index", "bibliography", "about the author"]
+
+Return ONLY the JSON array, nothing else."""
