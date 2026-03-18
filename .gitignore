@@ -23,6 +23,9 @@ Thumbs.db
 
 # Instance data (generated ontologies, prompts, caches)
 instance/
+*.db
+*.sqlite
+*.sqlite3
 
 # User data (documents for ingestion)
 data/
