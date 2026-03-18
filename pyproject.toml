@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synapseos"
-version = "0.1.0"
+version = "0.2.0"
 description = "Domain-agnostic knowledge operating system — bootstrap ontologies from documents, extract knowledge graphs, answer multi-hop reasoning questions"
 requires-python = ">=3.11"
 dependencies = [

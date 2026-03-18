@@ -14,13 +14,13 @@ After bootstrap, the instance is specialized for your domain — but the engine 
 ```
 Fresh clone (no ontology, no prompts)
   │
-  synapse init <docs>        # bootstrap: discover ontology + generate prompts
+  synapse -g <domain> init <docs>        # bootstrap: discover ontology + generate prompts
   │
-  synapse ingest <docs>      # extract knowledge graph using generated ontology
+  synapse -g <domain> ingest <docs>      # extract knowledge graph using generated ontology
   │
-  synapse chat               # ask questions, get grounded answers
+  synapse -g <domain> chat               # ask questions, get grounded answers
   │
-  synapse ingest <more>      # grow the KG — no duplicates, same ontology
+  synapse -g <domain> ingest <more>      # grow the KG — no duplicates, same ontology
 ```
 
 ## Requirements
@@ -60,18 +60,20 @@ cp .env.example .env
 | `SYNAPSE_LLM_TIMEOUT` | `180` | Request timeout in seconds |
 | `SYNAPSE_FALKORDB_HOST` | `localhost` | FalkorDB host |
 | `SYNAPSE_FALKORDB_PORT` | `6379` | FalkorDB port |
-| `SYNAPSE_GRAPH_NAME` | `synapse_kg` | Graph name (use different names for different domains) |
+| `SYNAPSE_GRAPH_NAME` | `synapse_kg` | Default graph name (overridden by `-g`) |
 
 ## Usage
+
+The `-g` / `--graph` flag selects which domain to work with. Each domain gets its own ontology, prompts, and knowledge graph — completely isolated.
 
 ### 1. Bootstrap — Discover Ontology from Documents
 
 ```bash
-# From a directory of PDFs
-synapse init ./documents/
+# Initialize a new domain from a directory of PDFs
+synapse -g electronics init ./datasheets/
 
 # From specific files
-synapse init paper1.pdf paper2.pdf datasheet.pdf
+synapse -g legal init contract1.pdf contract2.pdf terms.pdf
 ```
 
 This analyzes your documents and:
@@ -79,31 +81,31 @@ This analyzes your documents and:
 - Discovers entity types (e.g., `CHEMICAL_COMPOUND`, `LEGAL_CLAUSE`, `DIAGNOSIS`)
 - Discovers relationship types (e.g., `REACTS_WITH`, `REFERENCES_CLAUSE`, `TREATS`)
 - Generates 10 domain-specific prompts for extraction and reasoning
-- Stores everything in a SQLite database (`~/.synapse/<graph_name>/instance.db`)
+- Stores everything in a SQLite database (`~/.synapse/<domain>/instance.db`)
 
 ### 2. Ingest — Build the Knowledge Graph
 
 ```bash
-synapse ingest ./documents/
+synapse -g electronics ingest ./datasheets/
 
 # Reset graph and re-ingest from scratch
-synapse ingest ./documents/ --reset
+synapse -g electronics ingest ./datasheets/ --reset
 
 # Dry run — extract but don't store
-synapse ingest paper.pdf --dry-run
+synapse -g electronics ingest datasheet.pdf --dry-run
 ```
 
 ### 3. Chat — Ask Questions
 
 ```bash
 # Interactive mode
-synapse chat
+synapse -g electronics chat
 
 # Single question
-synapse chat -q "What consensus mechanism does JAM use?"
+synapse -g electronics chat -q "What is the maximum operating temperature of the LM7805?"
 
 # Verbose — see the reasoning trace
-synapse chat -v -q "How does the refine phase work?"
+synapse -g electronics chat -v -q "Compare voltage regulators by dropout voltage"
 ```
 
 The chat uses a ReAct reasoning loop that queries the knowledge graph with Cypher, reads document sections, and synthesizes answers grounded in your data.
@@ -111,69 +113,79 @@ The chat uses a ReAct reasoning loop that queries the knowledge graph with Cyphe
 ### 4. Grow — Add More Documents
 
 ```bash
-synapse ingest ./new-batch/
+synapse -g electronics ingest ./new-datasheets/
 ```
 
 Entity resolution deduplicates across ingestion runs. The KG grows without duplicates.
+
+## Multi-Domain
+
+Each `-g` name is a fully isolated domain with its own ontology, prompts, and graph. They share the same FalkorDB instance but never intersect:
+
+```bash
+# Domain 1: blockchain protocols
+synapse -g jam init ./graypaper/
+synapse -g jam ingest ./graypaper/
+synapse -g jam chat -q "What consensus mechanism does JAM use?"
+
+# Domain 2: electronics
+synapse -g electronics init ./datasheets/
+synapse -g electronics ingest ./datasheets/
+synapse -g electronics chat -q "What is the pinout of the ATmega328P?"
+
+# Domain 3: legal
+synapse -g legal init ./contracts/
+synapse -g legal ingest ./contracts/
+synapse -g legal chat -q "What are the termination clauses?"
+
+# Each has its own ontology, prompts, and knowledge graph
+synapse -g jam status --prompts
+synapse -g electronics status --prompts
+synapse -g legal status --prompts
+```
+
+Instance data is stored at `~/.synapse/<domain>/`. If `-g` is omitted, falls back to `SYNAPSE_GRAPH_NAME` env var (default: `synapse_kg`).
 
 ## Inspection & Management
 
 ### Instance Status
 
 ```bash
-synapse status                    # overview: domain, entity types, relationship types
-synapse status --prompts          # list all AI-generated prompts with previews
-synapse status --prompt-list      # just the prompt keys
-synapse status --prompt <key>     # show full prompt text
-synapse status --prompt <key> --offset 500 --length 1000  # slice of a prompt
+synapse -g jam status                      # overview: domain, entity types, relationship types
+synapse -g jam status --prompts            # list all AI-generated prompts with previews
+synapse -g jam status --prompt-list        # just the prompt keys
+synapse -g jam status --prompt <key>       # show full prompt text
+synapse -g jam status --prompt <key> --offset 500 --length 1000  # slice of a prompt
 ```
 
 ### Knowledge Graph
 
 ```bash
-synapse inspect                   # node/edge counts, entity/relationship type breakdown
-synapse inspect --triples         # show all extracted triples
-synapse inspect --tree            # show document section trees
-synapse inspect --duplicates      # find duplicate entities
-synapse inspect --cypher "MATCH (n:PROTOCOL)-[r]->(m) RETURN n.name, type(r), m.name"
+synapse -g jam inspect                     # node/edge counts, entity/relationship type breakdown
+synapse -g jam inspect --triples           # show all extracted triples
+synapse -g jam inspect --tree              # show document section trees
+synapse -g jam inspect --duplicates        # find duplicate entities
+synapse -g jam inspect --cypher "MATCH (n:PROTOCOL)-[r]->(m) RETURN n.name, type(r), m.name"
 ```
 
 ### Ontology Versions
 
 ```bash
-synapse versions                  # list all versions
-synapse versions --activate 1     # switch to version 1
-synapse versions --export 1       # export version as JSON (for backup or transfer)
+synapse -g jam versions                    # list all versions
+synapse -g jam versions --activate 1       # switch to version 1
+synapse -g jam versions --export 1         # export version as JSON (for backup or transfer)
 ```
-
-## Running Multiple Domains
-
-Each domain gets its own graph name and instance directory:
-
-```bash
-# Legal documents
-SYNAPSE_GRAPH_NAME=legal synapse init ./legal-docs/
-SYNAPSE_GRAPH_NAME=legal synapse ingest ./legal-docs/
-SYNAPSE_GRAPH_NAME=legal synapse chat
-
-# Medical papers
-SYNAPSE_GRAPH_NAME=medical synapse init ./medical-papers/
-SYNAPSE_GRAPH_NAME=medical synapse ingest ./medical-papers/
-SYNAPSE_GRAPH_NAME=medical synapse chat
-```
-
-Instance data is stored at `~/.synapse/<graph_name>/`.
 
 ## Backup & Restore
 
-Everything lives in one SQLite file per instance:
+Everything lives in one SQLite file per domain:
 
 ```bash
 # Backup
-cp ~/.synapse/my_kg/instance.db ~/backups/my_kg_backup.db
+cp ~/.synapse/jam/instance.db ~/backups/jam_backup.db
 
 # Export ontology version as JSON
-synapse versions --export 1 > ontology_v1.json
+synapse -g jam versions --export 1 > ontology_v1.json
 ```
 
 ## Architecture
