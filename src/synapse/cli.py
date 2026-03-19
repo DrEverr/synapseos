@@ -250,10 +250,11 @@ def chat(ctx: click.Context, query: str | None, verbose: bool) -> None:
     from synapse.storage.graph import GraphStore
     from synapse.storage.text_cache import TextCache
 
+    chat_model = settings.chat_model or settings.llm_model
     llm = LLMClient(
         api_key=settings.llm_api_key,
         base_url=settings.llm_base_url,
-        model=settings.llm_model,
+        model=chat_model,
         timeout=settings.llm_timeout,
     )
     graph = GraphStore(

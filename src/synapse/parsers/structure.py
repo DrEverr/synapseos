@@ -198,17 +198,48 @@ def _nest_sections(flat: list[dict]) -> list[Section]:
     return sections
 
 
+def _chunk_by_pages(section: Section, max_pages: int) -> list[Section]:
+    """Fallback: split a section into fixed-size page chunks."""
+    children: list[Section] = []
+    start = section.start_page
+    idx = 1
+    while start <= section.end_page:
+        end = min(start + max_pages - 1, section.end_page)
+        children.append(
+            Section(
+                title=f"{section.title} (pp. {start}-{end})",
+                start_page=start,
+                end_page=end,
+                node_id=f"{section.node_id}{idx:02d}",
+            )
+        )
+        start = end + 1
+        idx += 1
+    return children
+
+
 async def subdivide_large_sections(
     sections: list[Section],
     pages: list[str],
     llm: LLMClient,
     max_pages: int = 10,
     max_tokens: int = 20000,
+    _depth: int = 0,
 ) -> None:
-    """Recursively subdivide sections that are too large."""
+    """Recursively subdivide sections that are too large.
+
+    Strategy:
+    1. Try LLM-based subdivision (find logical subsections)
+    2. If LLM fails or children are still too large, recurse
+    3. Final fallback: chunk by fixed page count
+    """
+    max_depth = 4  # prevent infinite recursion
+
     for section in sections:
         if section.children:
-            await subdivide_large_sections(section.children, pages, llm, max_pages, max_tokens)
+            await subdivide_large_sections(
+                section.children, pages, llm, max_pages, max_tokens, _depth + 1
+            )
             continue
 
         text = pages_to_tagged_text(pages, section.start_page, section.end_page)
@@ -216,11 +247,20 @@ async def subdivide_large_sections(
             continue
 
         logger.info(
-            "Subdividing large section '%s' (%d pages)",
+            "Subdividing large section '%s' (%d pages, depth=%d)",
             section.title,
             section.page_count,
+            _depth,
         )
 
+        # At max depth or very large sections, skip LLM and chunk directly
+        if _depth >= max_depth:
+            logger.info("Max subdivision depth reached, chunking '%s' by pages", section.title)
+            section.children = _chunk_by_pages(section, max_pages)
+            continue
+
+        # Try LLM-based subdivision
+        llm_succeeded = False
         system = "You are a document structure analyst."
         user = f"""This section is too large and needs to be split into subsections.
 
@@ -242,31 +282,40 @@ Return ONLY the JSON array."""
                         result = result[key]
                         break
                 else:
-                    continue
+                    result = []
 
-            if not isinstance(result, list) or len(result) < 2:
-                continue
-
-            # Build child sections
-            children: list[Section] = []
-            for i, sub in enumerate(result):
-                start = sub.get("start_page", section.start_page)
-                end = (
-                    result[i + 1].get("start_page", section.end_page) - 1
-                    if i + 1 < len(result)
-                    else section.end_page
-                )
-                children.append(
-                    Section(
-                        title=sub.get("title", f"Part {i + 1}"),
-                        start_page=max(section.start_page, start),
-                        end_page=min(section.end_page, end),
-                        node_id=f"{section.node_id}{i + 1:02d}",
+            if isinstance(result, list) and len(result) >= 2:
+                children: list[Section] = []
+                for i, sub in enumerate(result):
+                    start = sub.get("start_page", section.start_page)
+                    end = (
+                        result[i + 1].get("start_page", section.end_page) - 1
+                        if i + 1 < len(result)
+                        else section.end_page
                     )
-                )
-            section.children = children
+                    children.append(
+                        Section(
+                            title=sub.get("title", f"Part {i + 1}"),
+                            start_page=max(section.start_page, start),
+                            end_page=min(section.end_page, end),
+                            node_id=f"{section.node_id}{i + 1:02d}",
+                        )
+                    )
+                section.children = children
+                llm_succeeded = True
         except Exception as e:
-            logger.warning("Failed to subdivide section '%s': %s", section.title, e)
+            logger.warning("LLM subdivision failed for '%s': %s", section.title, e)
+
+        if not llm_succeeded:
+            # Fallback: chunk by pages
+            logger.info("LLM subdivision failed, chunking '%s' by pages", section.title)
+            section.children = _chunk_by_pages(section, max_pages)
+
+        # Recurse into children — they may still be too large
+        if section.children:
+            await subdivide_large_sections(
+                section.children, pages, llm, max_pages, max_tokens, _depth + 1
+            )
 
 
 async def generate_summaries(

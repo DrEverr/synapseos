@@ -140,9 +140,16 @@ async def extract_entities(
         result = await llm.complete_json_lenient(
             system=system_prompt, user=user_prompt, max_tokens=4096
         )
-    except Exception:
-        logger.error("Entity extraction failed for section '%s'", section.title)
+    except Exception as e:
+        logger.error("Entity extraction LLM call failed for section '%s': %s", section.title, e)
         return []
+
+    # Log raw response for debugging
+    logger.debug(
+        "Entity extraction raw response for '%s': %s",
+        section.title,
+        str(result)[:500],
+    )
 
     if isinstance(result, dict):
         for key in ("entities", "data", "result"):
@@ -150,10 +157,17 @@ async def extract_entities(
                 result = result[key]
                 break
         else:
+            logger.warning(
+                "Entity extraction returned dict without 'entities' key for '%s': keys=%s",
+                section.title,
+                list(result.keys()) if isinstance(result, dict) else "N/A",
+            )
             result = []
 
     entities: list[Entity] = []
     valid_types = set(ontology.entity_types.keys())
+    skipped_no_text = 0
+    skipped_no_type = 0
 
     for item in result:
         if not isinstance(item, dict):
@@ -162,7 +176,11 @@ async def extract_entities(
         etype = item.get("entity_type", "").upper().strip()
         confidence = float(item.get("confidence", 0.5))
 
-        if not text or not etype:
+        if not text:
+            skipped_no_text += 1
+            continue
+        if not etype:
+            skipped_no_type += 1
             continue
 
         if etype not in valid_types:
@@ -179,5 +197,19 @@ async def extract_entities(
         )
         entities.append(entity)
 
-    logger.info("Extracted %d entities from section '%s'", len(entities), section.title)
+    if not entities:
+        input_len = len(section.text) if section.text else 0
+        logger.warning(
+            "0 entities from section '%s' (input=%d chars, raw_items=%d, "
+            "skipped_no_text=%d, skipped_no_type=%d, raw_type=%s)",
+            section.title,
+            input_len,
+            len(result) if isinstance(result, list) else 0,
+            skipped_no_text,
+            skipped_no_type,
+            type(result).__name__,
+        )
+    else:
+        logger.info("Extracted %d entities from section '%s'", len(entities), section.title)
+
     return entities

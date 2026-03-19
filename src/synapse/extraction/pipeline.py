@@ -165,12 +165,14 @@ async def ingest_files(
     store = settings.get_instance_store()
     ontology = OntologyRegistry(store=store, ontology_name=settings.ontology)
 
+    model = settings.extraction_model or settings.llm_model
     llm = LLMClient(
         api_key=settings.llm_api_key,
         base_url=settings.llm_base_url,
-        model=settings.llm_model,
+        model=model,
         timeout=settings.llm_timeout,
     )
+    logger.info("Extraction using model: %s", model)
     text_cache = TextCache(cache_dir=settings.get_text_cache_dir())
 
     graph: GraphStore | None = None

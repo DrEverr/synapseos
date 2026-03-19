@@ -241,12 +241,14 @@ async def bootstrap(
 
     Returns a summary dict.
     """
+    model = settings.bootstrap_model or settings.llm_model
     llm = LLMClient(
         api_key=settings.llm_api_key,
         base_url=settings.llm_base_url,
-        model=settings.llm_model,
+        model=model,
         timeout=settings.llm_timeout,
     )
+    logger.info("Bootstrap using model: %s", model)
 
     # ── 1. Extract pages from all documents ───────────────────
     all_pages: list[list[str]] = []

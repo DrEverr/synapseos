@@ -31,13 +31,18 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # LLM
+    # LLM — default model used when per-phase model is not set
     llm_api_key: str = ""
     llm_base_url: str = "https://openrouter.ai/api/v1"
     llm_model: str = "openrouter/auto"
     llm_temperature: float = 0.0
     llm_max_tokens: int = 4096
     llm_timeout: float = 180
+
+    # Per-phase model overrides (fall back to llm_model if empty)
+    bootstrap_model: str = ""
+    extraction_model: str = ""
+    chat_model: str = ""
 
     # FalkorDB
     falkordb_host: str = "localhost"
