@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 from synapse.config import OntologyRegistry, Settings
+from synapse.extraction.discovery import discover_ontology_gaps
 from synapse.extraction.entities import extract_entities
 from synapse.extraction.relationships import extract_relationships
 from synapse.llm.client import LLMClient
@@ -61,6 +62,31 @@ async def process_document(
         max_pages_per_node=settings.structure_max_pages_per_node,
         max_tokens_per_node=settings.structure_max_tokens_per_node,
     )
+
+    # Step 1b: Ontology discovery — check if document introduces types not in ontology
+    new_etypes, new_rtypes = await discover_ontology_gaps(
+        doc=doc,
+        llm=llm,
+        ontology=ontology,
+        store=store,
+    )
+    if new_etypes or new_rtypes:
+        parts: list[str] = []
+        if new_etypes:
+            parts.append("Entity types: " + ", ".join(f"{k} ({v})" for k, v in new_etypes.items()))
+        if new_rtypes:
+            parts.append(
+                "Relationship types: " + ", ".join(f"{k} ({v})" for k, v in new_rtypes.items())
+            )
+        logger.warning(
+            "Ontology auto-expanded with %d entity type(s), %d relationship type(s):\n  %s",
+            len(new_etypes),
+            len(new_rtypes),
+            "\n  ".join(parts),
+        )
+        # Update graph indexes for newly added entity types
+        if new_etypes and graph:
+            graph.ensure_indexes(ontology.entity_types)
 
     # Step 2: Extract entities and relationships from each leaf section
     all_entities: list[Entity] = []

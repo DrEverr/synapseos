@@ -14,11 +14,32 @@ from synapse.config import OntologyRegistry, Settings, get_settings
 
 
 def setup_logging(level: str = "INFO") -> None:
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+    from datetime import datetime
+
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)  # capture everything; handlers filter
+
+    # Console handler — respects user-requested level
+    console = logging.StreamHandler()
+    console.setLevel(getattr(logging, level.upper(), logging.INFO))
+    console.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
     )
+    root.addHandler(console)
+
+    # File handler — always DEBUG, one file per run
+    logs_dir = Path.home() / ".synapse" / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_handler = logging.FileHandler(logs_dir / f"synapse_{timestamp}.log", encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    root.addHandler(file_handler)
 
 
 @click.group()

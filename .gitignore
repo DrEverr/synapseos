@@ -30,6 +30,9 @@ instance/
 # User data (documents for ingestion)
 data/
 
+# Logs
+logs/
+
 # Pytest / Ruff cache
 .pytest_cache/
 .ruff_cache/

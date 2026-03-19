@@ -105,6 +105,7 @@ async def extract_entities(
         return []
 
     if not section.text.strip():
+        logger.debug("Skipping section with empty text: %s", section.title)
         return []
 
     # Get prompts from store (generated) or use fallback
