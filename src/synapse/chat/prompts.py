@@ -86,6 +86,28 @@ RELEVANT SECTIONS (from tree search):
 Think step by step. Use GRAPH_QUERY to explore the knowledge graph. When you have enough information, use ANSWER."""
 
 
+SELF_ASSESSMENT_SYSTEM = "You are a critical evaluator of AI-generated answers."
+
+SELF_ASSESSMENT_USER = """Evaluate the following AI-generated answer for quality and reliability.
+
+QUESTION: {question}
+
+ANSWER: {answer}
+
+EVIDENCE USED (from reasoning trace):
+{evidence_summary}
+
+Assess the answer on these dimensions:
+1. **confidence** (0.0-1.0): How confident are you that the answer is correct and complete?
+2. **groundedness** (0.0-1.0): What fraction of claims are supported by evidence from the graph or documents (vs. generated/hallucinated)?
+3. **completeness** (0.0-1.0): Does the answer fully address the question, or are parts missing?
+4. **reasoning**: A 1-2 sentence explanation of your assessment.
+5. **gaps**: A list of specific knowledge gaps that would improve the answer (empty list if none).
+
+Return a JSON object with exactly these keys: "confidence", "groundedness", "completeness", "reasoning", "gaps".
+Return ONLY the JSON."""
+
+
 ENRICHMENT_SYSTEM = "You are an expert knowledge extraction system."
 
 ENRICHMENT_USER = """Extract entities and relationships from the following AI-generated answer.

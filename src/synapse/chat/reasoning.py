@@ -1,16 +1,39 @@
-"""ReAct reasoning loop for graph-RAG question answering."""
+"""ReAct reasoning loop for graph-RAG question answering.
+
+Integrates three autonomous-learning features inspired by
+Dupoux, LeCun & Malik (2026) — "Why AI systems don't learn":
+
+1. **Enrichment loop** (System B → System A feedback):
+   After answering, extracts new entities/relationships from the answer
+   and merges them into the knowledge graph.
+
+2. **Episode logging** (Episodic Memory):
+   Stores complete reasoning traces (question, actions, answer, metrics)
+   in SQLite for later replay and meta-cognition.
+
+3. **Self-assessment** (Meta-cognition / System M telemetry):
+   After answering, the LLM evaluates its own confidence, groundedness,
+   and completeness — producing epistemic signals for future use.
+"""
 
 from __future__ import annotations
 
 import logging
 import re
 import time
+from typing import Any
 
-from synapse.chat.prompts import REASONING_SYSTEM, REASONING_USER
+from synapse.chat.prompts import (
+    REASONING_SYSTEM,
+    REASONING_USER,
+    SELF_ASSESSMENT_SYSTEM,
+    SELF_ASSESSMENT_USER,
+)
 from synapse.chat.retrieval import get_section_summaries, get_section_text, tree_search
 from synapse.config import OntologyRegistry
-from synapse.llm.templates import safe_format
 from synapse.llm.client import LLMClient
+from synapse.llm.templates import safe_format
+from synapse.models.reasoning import EnrichmentResult, ReasoningResult, SelfAssessment
 from synapse.storage.graph import GraphStore
 from synapse.storage.instance_store import InstanceStore
 from synapse.storage.text_cache import TextCache
@@ -118,6 +141,148 @@ def _extract_inline_answer(text: str) -> str:
     return text.strip() if text.strip() else "I was unable to determine an answer."
 
 
+def _format_query_result(result: list) -> str:
+    """Format Cypher query results for inclusion in the conversation."""
+    if not result:
+        return "(no results)"
+    lines: list[str] = []
+    for row in result[:20]:
+        if isinstance(row, (list, tuple)):
+            lines.append(" | ".join(str(cell) for cell in row))
+        else:
+            lines.append(str(row))
+    if len(result) > 20:
+        lines.append(f"... ({len(result)} total rows)")
+    return "\n".join(lines)
+
+
+def _build_evidence_summary(actions_log: list[dict[str, str]]) -> str:
+    """Build a concise summary of evidence gathered during reasoning for self-assessment."""
+    evidence_parts: list[str] = []
+    for entry in actions_log:
+        tool = entry.get("tool", "")
+        observation = entry.get("observation", "")
+        if tool == "GRAPH_QUERY" and observation and "(no results)" not in observation:
+            # Truncate long query results
+            obs_truncated = observation[:500] + "..." if len(observation) > 500 else observation
+            evidence_parts.append(f"[Graph] {obs_truncated}")
+        elif tool == "SECTION_TEXT" and observation:
+            obs_truncated = observation[:300] + "..." if len(observation) > 300 else observation
+            evidence_parts.append(f"[Section] {obs_truncated}")
+    if not evidence_parts:
+        return "(no evidence gathered from graph or documents)"
+    return "\n".join(evidence_parts[:10])
+
+
+async def _assess_answer(
+    question: str,
+    answer: str,
+    actions_log: list[dict[str, str]],
+    llm: LLMClient,
+    store: InstanceStore | None = None,
+) -> SelfAssessment:
+    """Run LLM self-assessment on the generated answer."""
+    evidence_summary = _build_evidence_summary(actions_log)
+
+    system = SELF_ASSESSMENT_SYSTEM
+    user_template = SELF_ASSESSMENT_USER
+    if store:
+        custom_system = store.get_prompt("self_assessment_system")
+        custom_user = store.get_prompt("self_assessment_user")
+        if custom_system:
+            system = custom_system
+        if custom_user:
+            user_template = custom_user
+
+    user_prompt = safe_format(
+        user_template,
+        question=question,
+        answer=answer,
+        evidence_summary=evidence_summary,
+    )
+
+    try:
+        data: Any = await llm.complete_json_lenient(
+            system=system, user=user_prompt, temperature=0.0, max_tokens=1024
+        )
+    except Exception as e:
+        logger.warning("Self-assessment LLM call failed: %s", e)
+        return SelfAssessment()
+
+    if not isinstance(data, dict):
+        return SelfAssessment()
+
+    return SelfAssessment(
+        confidence=float(data.get("confidence", 0.0)),
+        groundedness=float(data.get("groundedness", 0.0)),
+        completeness=float(data.get("completeness", 0.0)),
+        reasoning=str(data.get("reasoning", "")),
+        gaps=[str(g) for g in data.get("gaps", []) if isinstance(g, str)],
+    )
+
+
+async def _enrich_from_answer(
+    answer: str,
+    question: str,
+    graph: GraphStore,
+    llm: LLMClient,
+    ontology: OntologyRegistry,
+    store: InstanceStore | None = None,
+) -> EnrichmentResult:
+    """Extract new knowledge from the answer and merge into the graph."""
+    from synapse.chat.enrichment import enrich_graph_from_answer
+
+    try:
+        entities_added, rels_added = await enrich_graph_from_answer(
+            answer=answer,
+            question=question,
+            graph=graph,
+            llm=llm,
+            ontology=ontology,
+            store=store,
+        )
+        return EnrichmentResult(entities_added=entities_added, relationships_added=rels_added)
+    except Exception as e:
+        logger.warning("Enrichment failed: %s", e)
+        return EnrichmentResult()
+
+
+def _log_episode(
+    result: ReasoningResult,
+    store: InstanceStore | None,
+) -> None:
+    """Persist a reasoning episode to the instance store."""
+    if not store:
+        return
+    try:
+        assessment = result.assessment or SelfAssessment()
+        enrichment = result.enrichment or EnrichmentResult()
+        store.store_reasoning_episode(
+            question=result.question,
+            answer=result.answer,
+            steps_taken=result.steps_taken,
+            empty_results=result.empty_result_count,
+            timed_out=result.timed_out,
+            max_steps_reached=result.max_steps_reached,
+            doom_loop_triggered=result.doom_loop_triggered,
+            elapsed_seconds=result.elapsed_seconds,
+            section_ids=result.section_ids_used,
+            actions_log=result.actions_log,
+            confidence=assessment.confidence,
+            groundedness=assessment.groundedness,
+            completeness=assessment.completeness,
+            assessment_reasoning=assessment.reasoning,
+            assessment_gaps=assessment.gaps,
+            entities_added=enrichment.entities_added,
+            rels_added=enrichment.relationships_added,
+        )
+    except Exception as e:
+        logger.warning("Failed to log reasoning episode: %s", e)
+
+
+# ── Main entry point ──────────────────────────────────────
+
+
 async def reason(
     question: str,
     graph: GraphStore,
@@ -131,7 +296,44 @@ async def reason(
     step_max_tokens: int = 2048,
     store: InstanceStore | None = None,
 ) -> str:
-    """Execute a ReAct reasoning loop to answer a question."""
+    """Execute a ReAct reasoning loop to answer a question.
+
+    This is the backward-compatible entry point that returns just the answer string.
+    For the full result including assessment and enrichment data, use reason_full().
+    """
+    result = await reason_full(
+        question=question,
+        graph=graph,
+        llm=llm,
+        ontology=ontology,
+        max_steps=max_steps,
+        doom_threshold=doom_threshold,
+        verbose=verbose,
+        text_cache=text_cache,
+        reasoning_timeout=reasoning_timeout,
+        step_max_tokens=step_max_tokens,
+        store=store,
+    )
+    return result.answer
+
+
+async def reason_full(
+    question: str,
+    graph: GraphStore,
+    llm: LLMClient,
+    ontology: OntologyRegistry,
+    max_steps: int = 20,
+    doom_threshold: int = 5,
+    verbose: bool = False,
+    text_cache: TextCache | None = None,
+    reasoning_timeout: float = 300,
+    step_max_tokens: int = 2048,
+    store: InstanceStore | None = None,
+) -> ReasoningResult:
+    """Execute a ReAct reasoning loop with enrichment, self-assessment, and episode logging.
+
+    Returns a ReasoningResult containing the answer plus all metadata.
+    """
     t0 = time.monotonic()
 
     # Phase 1: Tree search
@@ -167,11 +369,19 @@ async def reason(
     ]
 
     empty_result_count = 0
+    total_empty_results = 0
+    actions_log: list[dict[str, str]] = []
+    doom_loop_triggered = False
+    timed_out = False
+    max_steps_reached = False
+    answer = ""
+    steps_completed = 0
 
     for step in range(max_steps):
         elapsed = time.monotonic() - t0
         if elapsed >= reasoning_timeout:
             logger.warning("Reasoning timeout at step %d", step + 1)
+            timed_out = True
             break
 
         if verbose:
@@ -193,12 +403,17 @@ async def reason(
         action = _parse_action(response)
         if action is None:
             if "answer" in response.lower() and step > 0:
-                return _extract_inline_answer(response)
+                answer = _extract_inline_answer(response)
+                steps_completed = step + 1
+                break
             messages.append(
                 {
                     "role": "user",
-                    "content": "You did NOT provide an action. Every response MUST end with exactly one of:\n"
-                    "Action: GRAPH_QUERY(MATCH ...)\nAction: SECTION_TEXT(section_id)\nAction: ANSWER(your answer)\n"
+                    "content": "You did NOT provide an action. Every response MUST end with "
+                    "exactly one of:\n"
+                    "Action: GRAPH_QUERY(MATCH ...)\n"
+                    "Action: SECTION_TEXT(section_id)\n"
+                    "Action: ANSWER(your answer)\n"
                     "Do it now.",
                 }
             )
@@ -207,7 +422,10 @@ async def reason(
         tool, args, had_multi = action
 
         if tool == "ANSWER":
-            return args
+            answer = args
+            steps_completed = step + 1
+            actions_log.append({"tool": "ANSWER", "args": "", "observation": ""})
+            break
 
         multi_warning = ""
         if had_multi:
@@ -224,9 +442,13 @@ async def reason(
                     hint = _suggest_entity_alternatives(sanitized, graph)
                     result_text = f"(no results){hint}"
                     empty_result_count += 1
+                    total_empty_results += 1
             except Exception as e:
                 result_text = f"(query error: {e})"
                 empty_result_count += 1
+                total_empty_results += 1
+
+            actions_log.append({"tool": "GRAPH_QUERY", "args": args, "observation": result_text})
 
             if verbose:
                 print(f"Result: {result_text[:500]}")
@@ -236,12 +458,16 @@ async def reason(
 
         elif tool == "SECTION_TEXT":
             text = get_section_text(args, graph, text_cache)
+            actions_log.append({"tool": "SECTION_TEXT", "args": args, "observation": text})
             if verbose:
                 print(f"Section: {text[:500]}")
             messages.append({"role": "user", "content": f"Section text:\n{text}{multi_warning}"})
 
+        steps_completed = step + 1
+
         if empty_result_count >= doom_threshold:
             logger.warning("Doom loop detected, forcing answer")
+            doom_loop_triggered = True
             messages.append(
                 {
                     "role": "user",
@@ -251,29 +477,81 @@ async def reason(
             )
             empty_result_count = 0
 
-    # Max steps or timeout — force final answer
-    messages.append(
-        {
-            "role": "user",
-            "content": "Maximum steps reached. Provide your final answer using ANSWER() now.",
-        }
-    )
-    final = await llm.complete_messages(messages=messages, temperature=0.0, max_tokens=1024)
-    final_action = _parse_action(final)
-    if final_action and final_action[0] == "ANSWER":
-        return final_action[1]
-    return _extract_inline_answer(final)
-
-
-def _format_query_result(result: list) -> str:
-    if not result:
-        return "(no results)"
-    lines: list[str] = []
-    for row in result[:20]:
-        if isinstance(row, (list, tuple)):
-            lines.append(" | ".join(str(cell) for cell in row))
+    # If no answer was produced in the loop, force a final answer
+    if not answer:
+        if not timed_out:
+            max_steps_reached = True
+        messages.append(
+            {
+                "role": "user",
+                "content": "Maximum steps reached. Provide your final answer using ANSWER() now.",
+            }
+        )
+        final = await llm.complete_messages(messages=messages, temperature=0.0, max_tokens=1024)
+        final_action = _parse_action(final)
+        if final_action and final_action[0] == "ANSWER":
+            answer = final_action[1]
         else:
-            lines.append(str(row))
-    if len(result) > 20:
-        lines.append(f"... ({len(result)} total rows)")
-    return "\n".join(lines)
+            answer = _extract_inline_answer(final)
+
+    elapsed_total = time.monotonic() - t0
+
+    # Phase 3: Self-assessment — evaluate answer quality
+    assessment = await _assess_answer(
+        question=question,
+        answer=answer,
+        actions_log=actions_log,
+        llm=llm,
+        store=store,
+    )
+
+    if verbose and assessment:
+        print(
+            f"\n--- Self-Assessment ---\n"
+            f"Confidence: {assessment.confidence:.2f}  "
+            f"Groundedness: {assessment.groundedness:.2f}  "
+            f"Completeness: {assessment.completeness:.2f}\n"
+            f"Reasoning: {assessment.reasoning}"
+        )
+        if assessment.gaps:
+            print(f"Gaps: {', '.join(assessment.gaps)}")
+
+    # Phase 4: Enrichment — extract new knowledge from the answer
+    enrichment = await _enrich_from_answer(
+        answer=answer,
+        question=question,
+        graph=graph,
+        llm=llm,
+        ontology=ontology,
+        store=store,
+    )
+
+    if verbose and enrichment:
+        added = enrichment.entities_added + enrichment.relationships_added
+        if added > 0:
+            print(
+                f"\n--- Enrichment ---\n"
+                f"Added {enrichment.entities_added} entities, "
+                f"{enrichment.relationships_added} relationships to graph"
+            )
+
+    # Build result
+    result = ReasoningResult(
+        answer=answer,
+        question=question,
+        steps_taken=steps_completed,
+        empty_result_count=total_empty_results,
+        timed_out=timed_out,
+        max_steps_reached=max_steps_reached,
+        doom_loop_triggered=doom_loop_triggered,
+        elapsed_seconds=round(elapsed_total, 2),
+        section_ids_used=section_ids,
+        actions_log=actions_log,
+        assessment=assessment,
+        enrichment=enrichment,
+    )
+
+    # Phase 5: Log episode to SQLite
+    _log_episode(result, store)
+
+    return result

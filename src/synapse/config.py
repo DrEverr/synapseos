@@ -29,6 +29,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_prefix="SYNAPSE_",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # LLM — default model used when per-phase model is not set

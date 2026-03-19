@@ -75,6 +75,28 @@ CREATE TABLE IF NOT EXISTS bootstrap_sources (
     sample_text    TEXT DEFAULT '',
     processed_at   TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS reasoning_episodes (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    question         TEXT NOT NULL,
+    answer           TEXT NOT NULL,
+    steps_taken      INTEGER DEFAULT 0,
+    empty_results    INTEGER DEFAULT 0,
+    timed_out        INTEGER DEFAULT 0,
+    max_steps_reached INTEGER DEFAULT 0,
+    doom_loop_triggered INTEGER DEFAULT 0,
+    elapsed_seconds  REAL DEFAULT 0.0,
+    section_ids      TEXT DEFAULT '[]',
+    actions_log      TEXT DEFAULT '[]',
+    confidence       REAL DEFAULT 0.0,
+    groundedness     REAL DEFAULT 0.0,
+    completeness     REAL DEFAULT 0.0,
+    assessment_reasoning TEXT DEFAULT '',
+    assessment_gaps  TEXT DEFAULT '[]',
+    entities_added   INTEGER DEFAULT 0,
+    rels_added       INTEGER DEFAULT 0,
+    created_at       TEXT NOT NULL
+);
 """
 
 
@@ -320,6 +342,92 @@ class InstanceStore:
             (vid,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Reasoning Episodes ────────────────────────────────────
+
+    def store_reasoning_episode(
+        self,
+        question: str,
+        answer: str,
+        steps_taken: int = 0,
+        empty_results: int = 0,
+        timed_out: bool = False,
+        max_steps_reached: bool = False,
+        doom_loop_triggered: bool = False,
+        elapsed_seconds: float = 0.0,
+        section_ids: list[str] | None = None,
+        actions_log: list[dict[str, str]] | None = None,
+        confidence: float = 0.0,
+        groundedness: float = 0.0,
+        completeness: float = 0.0,
+        assessment_reasoning: str = "",
+        assessment_gaps: list[str] | None = None,
+        entities_added: int = 0,
+        rels_added: int = 0,
+    ) -> int:
+        """Store a complete reasoning episode for later analysis."""
+        now = datetime.now(timezone.utc).isoformat()
+        cur = self._conn.execute(
+            "INSERT INTO reasoning_episodes "
+            "(question, answer, steps_taken, empty_results, timed_out, max_steps_reached, "
+            "doom_loop_triggered, elapsed_seconds, section_ids, actions_log, "
+            "confidence, groundedness, completeness, assessment_reasoning, assessment_gaps, "
+            "entities_added, rels_added, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                question,
+                answer,
+                steps_taken,
+                empty_results,
+                int(timed_out),
+                int(max_steps_reached),
+                int(doom_loop_triggered),
+                elapsed_seconds,
+                json.dumps(section_ids or []),
+                json.dumps(actions_log or []),
+                confidence,
+                groundedness,
+                completeness,
+                assessment_reasoning,
+                json.dumps(assessment_gaps or []),
+                entities_added,
+                rels_added,
+                now,
+            ),
+        )
+        self._conn.commit()
+        episode_id = cur.lastrowid
+        assert episode_id is not None
+        logger.info("Stored reasoning episode %d for question: %.60s...", episode_id, question)
+        return episode_id
+
+    def get_reasoning_episodes(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        """Retrieve recent reasoning episodes, newest first."""
+        rows = self._conn.execute(
+            "SELECT * FROM reasoning_episodes ORDER BY id DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_reasoning_stats(self) -> dict[str, Any]:
+        """Aggregate statistics across all reasoning episodes."""
+        row = self._conn.execute(
+            "SELECT "
+            "  COUNT(*) AS total_episodes, "
+            "  AVG(steps_taken) AS avg_steps, "
+            "  AVG(elapsed_seconds) AS avg_elapsed, "
+            "  AVG(confidence) AS avg_confidence, "
+            "  AVG(groundedness) AS avg_groundedness, "
+            "  AVG(completeness) AS avg_completeness, "
+            "  SUM(entities_added) AS total_entities_added, "
+            "  SUM(rels_added) AS total_rels_added, "
+            "  SUM(timed_out) AS total_timeouts, "
+            "  SUM(doom_loop_triggered) AS total_doom_loops "
+            "FROM reasoning_episodes"
+        ).fetchone()
+        if not row:
+            return {}
+        return dict(row)
 
     # ── Export / Import ───────────────────────────────────────
 
