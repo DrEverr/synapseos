@@ -6,12 +6,66 @@ import asyncio
 import logging
 from typing import Any
 
-from openai import AsyncOpenAI
-from tenacity import retry, stop_after_attempt, wait_exponential
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncOpenAI,
+    InternalServerError,
+    RateLimitError,
+)
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from synapse.llm.json_repair import repair_and_parse_json
 
 logger = logging.getLogger(__name__)
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Return True only for transient errors worth retrying.
+
+    Permanent client errors (401 auth, 400 bad request, 403 forbidden, 404 not found)
+    are NOT retried — they will never succeed on retry.
+    """
+    if isinstance(exc, (RateLimitError, InternalServerError)):
+        # 429 rate-limit and 5xx server errors are transient
+        return True
+    if isinstance(exc, APIStatusError):
+        # Any other HTTP error (400, 401, 403, 404, 402, …) is permanent
+        return False
+    if isinstance(exc, (APIConnectionError, APITimeoutError)):
+        # Network/timeout issues are transient
+        return True
+    if isinstance(exc, (asyncio.TimeoutError, ConnectionError, OSError)):
+        # Low-level network/timeout errors are transient
+        return True
+    # Unknown exceptions — don't retry (fail fast)
+    return False
+
+
+def _log_retry(retry_state: Any) -> None:
+    """Log each retry attempt with the error details."""
+    exc = retry_state.outcome.exception()
+    attempt = retry_state.attempt_number
+    if isinstance(exc, APIStatusError):
+        logger.warning(
+            "LLM call failed (attempt %d/3, status %d): %s",
+            attempt,
+            exc.status_code,
+            exc.message,
+        )
+    else:
+        logger.warning(
+            "LLM call failed (attempt %d/3): %s: %s", attempt, type(exc).__name__, exc
+        )
+
+
+_RETRY_POLICY = dict(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(min=1, max=10),
+    retry=retry_if_exception(_is_retryable),
+    before_sleep=_log_retry,
+)
 
 
 class LLMClient:
@@ -26,9 +80,10 @@ class LLMClient:
     ) -> None:
         self.model = model
         self.timeout = timeout
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        # Disable the SDK's built-in retries — tenacity handles retry logic
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @retry(**_RETRY_POLICY)
     async def complete(
         self,
         system: str,
@@ -57,7 +112,7 @@ class LLMClient:
         content = response.choices[0].message.content or ""
         return content
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @retry(**_RETRY_POLICY)
     async def complete_messages(
         self,
         messages: list[dict[str, str]],
@@ -104,6 +159,7 @@ class LLMClient:
         """Try JSON mode first, fall back to free-form + repair.
 
         Some providers don't support response_format, so we try both.
+        Non-retryable errors (auth, bad request, etc.) propagate immediately.
         """
         try:
             return await self.complete_json(
@@ -112,6 +168,9 @@ class LLMClient:
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+        except APIStatusError:
+            # Permanent API errors should propagate, not fall through to retry
+            raise
         except Exception:
             logger.debug("JSON mode failed, falling back to free-form + repair")
 
