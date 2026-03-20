@@ -277,7 +277,12 @@ async def bootstrap(
     language = domain_info.get("language", "English")
     document_types = domain_info.get("document_types", [])
     key_topics = domain_info.get("key_topics", [])
-    domain_context = f"Domain: {domain}. Subdomain: {subdomain}. Language: {language}. Topics: {', '.join(key_topics)}"
+    scientific_aspects = domain_info.get("scientific_aspects", [])
+    domain_context = (
+        f"Domain: {domain}. Subdomain: {subdomain}. Language: {language}. "
+        f"Topics: {', '.join(key_topics)}."
+        + (f" Underlying scientific aspects: {', '.join(scientific_aspects)}." if scientific_aspects else "")
+    )
 
     # ── 4. Discover ontology (may run multiple rounds for large batches) ─
     logger.info("Step 2/5: Discovering ontology...")

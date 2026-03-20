@@ -75,8 +75,8 @@ class Settings(BaseSettings):
 
     # Bootstrap
     bootstrap_sample_pages: int = 30
-    bootstrap_max_entity_types: int = 15
-    bootstrap_max_rel_types: int = 20
+    bootstrap_max_entity_types: int = 35
+    bootstrap_max_rel_types: int = 50
 
     # Logging
     log_level: str = "INFO"

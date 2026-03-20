@@ -34,6 +34,8 @@ Return a JSON object with:
 - "document_types": Array of document types found (e.g., ["cookbook", "recipe collection"], ["technical data sheet", "safety data sheet"])
 - "key_topics": Array of 5-10 key topics/themes found in the documents
 - "complexity": "basic", "intermediate", or "advanced" — how technical/specialized the content is
+- "scientific_aspects": Array of 3-10 theoretical or mechanistic concepts that underpin this domain —
+  the principles explaining why and how things work, beyond what the documents explicitly state
 
 Return ONLY the JSON, nothing else."""
 
@@ -68,6 +70,17 @@ GUIDELINES:
 - Think about what multi-hop queries a user would want to ask and design for those paths
 - Include types for measurable properties, conditions, and classifications
 - Include types for provenance (source documents, organizations, standards)
+- Ensure outcome relationships (states, behaviors, effects) are traceable to the specific
+  entity that produces them — not only to a shared intermediate node (process, event, condition)
+  that is common across many different subjects
+- If two different entities produce different outcomes under the same condition, that difference
+  must be visible in the graph — add direct subject→outcome relationship types or a qualifying
+  relationship (e.g., APPLIES_TO) so outcomes are never ambiguous about which entity they belong to
+- Include types for the underlying mechanisms, processes, and principles that explain why domain
+  outcomes occur — not just the outcomes themselves
+- Include types for risks, failure conditions, and constraints inherent to this domain
+- Include types for quantifiable thresholds, ranges, and conditions that govern domain behavior
+- Include types for compatibility, substitutability, and exclusion relationships between domain elements
 
 Return a JSON object with:
 - "entity_types": object mapping TYPE_NAME to description string
@@ -138,6 +151,12 @@ REFINEMENT TASKS:
 4. Add any missing types that would be critical for this domain
 5. Ensure descriptions are clear and specific enough to guide an LLM during extraction
 6. Cap at {max_entity_types} entity types and {max_rel_types} relationship types
+7. Check for outcome ambiguity: for each type representing a result, state, or effect, ask
+   "given this node and its neighbors, can I tell which specific entity causes it?" — if not,
+   add a direct relationship from the primary subject entity to the outcome, or add a qualifying
+   relationship type (e.g., APPLIES_TO) that links the outcome back to the entity it belongs to
+8. Verify depth — the ontology should answer "why/how", not just "what": add types for underlying
+   mechanisms, risks, quantifiable thresholds, or compatibility constraints if absent and relevant
 
 Return a JSON object with:
 - "entity_types": refined mapping of TYPE_NAME to description

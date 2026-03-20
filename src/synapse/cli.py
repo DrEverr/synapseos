@@ -47,6 +47,7 @@ def setup_logging(level: str = "INFO") -> None:
     "-g", "--graph", default=None, help="Graph/domain name (overrides SYNAPSE_GRAPH_NAME)"
 )
 @click.option("--log-level", default=None, help="Logging level")
+@click.version_option(None, "-V", "--version", package_name="synapseos", prog_name="synapse")
 @click.pass_context
 def main(ctx: click.Context, graph: str | None, log_level: str | None) -> None:
     """SynapseOS — Domain-Agnostic Knowledge Operating System.
