@@ -34,8 +34,17 @@ Fresh clone (no ontology, no prompts)
 ```bash
 git clone git@github.com:DrEverr/synapseos.git
 cd synapseos
-pip install -e .
+python3 -m venv ~/.synapse/venv
+~/.synapse/venv/bin/pip install -e .
 ```
+
+Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
+
+```bash
+export PATH="$HOME/.synapse/venv/bin:$PATH"
+```
+
+Then reload: `source ~/.zshrc`
 
 Start FalkorDB:
 
@@ -81,7 +90,7 @@ This analyzes your documents and:
 - Discovers entity types (e.g., `CHEMICAL_COMPOUND`, `LEGAL_CLAUSE`, `DIAGNOSIS`)
 - Discovers relationship types (e.g., `REACTS_WITH`, `REFERENCES_CLAUSE`, `TREATS`)
 - Generates 10 domain-specific prompts for extraction and reasoning
-- Stores everything in a SQLite database (`~/.synapse/<domain>/instance.db`)
+- Stores everything in a SQLite database (`~/.synapse/dbs/<domain>/instance.db`)
 
 ### 2. Ingest — Build the Knowledge Graph
 
@@ -144,7 +153,7 @@ synapse -g electronics status --prompts
 synapse -g legal status --prompts
 ```
 
-Instance data is stored at `~/.synapse/<domain>/`. If `-g` is omitted, falls back to `SYNAPSE_GRAPH_NAME` env var (default: `synapse_kg`).
+Instance data is stored at `~/.synapse/dbs/<domain>/`. If `-g` is omitted, falls back to `SYNAPSE_GRAPH_NAME` env var (default: `synapse_kg`).
 
 ## Inspection & Management
 
@@ -182,7 +191,7 @@ Everything lives in one SQLite file per domain:
 
 ```bash
 # Backup
-cp ~/.synapse/jam/instance.db ~/backups/jam_backup.db
+cp ~/.synapse/dbs/jam/instance.db ~/backups/jam_backup.db
 
 # Export ontology version as JSON
 synapse -g jam versions --export 1 > ontology_v1.json

@@ -13,12 +13,11 @@ logger = logging.getLogger(__name__)
 class TextCache:
     """Maps section IDs to full text files on disk.
 
-    Default location: ~/.synapse/text_cache/ (or instance_dir/text_cache/).
+    Location: ~/.synapse/dbs/<graph_name>/text_cache/ (or instance_dir/text_cache/).
+    Always pass cache_dir explicitly (use settings.get_text_cache_dir()).
     """
 
-    def __init__(self, cache_dir: str | Path | None = None) -> None:
-        if cache_dir is None:
-            cache_dir = Path.home() / ".synapse" / "text_cache"
+    def __init__(self, cache_dir: str | Path) -> None:
         self._dir = Path(cache_dir)
         self._dir.mkdir(parents=True, exist_ok=True)
         self._index_path = self._dir / "_index.json"

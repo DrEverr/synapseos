@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     graph_name: str = "synapse_kg"
 
     # Instance directory (stores SQLite DB, text cache, etc.)
-    # Default: ~/.synapse/<graph_name>/
+    # Default: ~/.synapse/dbs/<graph_name>/
     instance_dir: str = ""
 
     # Extraction
@@ -86,7 +86,7 @@ class Settings(BaseSettings):
         if self.instance_dir:
             p = Path(self.instance_dir)
         else:
-            p = Path.home() / ".synapse" / self.graph_name
+            p = Path.home() / ".synapse" / "dbs" / self.graph_name
         p.mkdir(parents=True, exist_ok=True)
         return p
 
