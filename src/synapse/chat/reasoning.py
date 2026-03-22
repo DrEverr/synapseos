@@ -24,6 +24,8 @@ import time
 from typing import Any
 
 from synapse.chat.prompts import (
+    COMPACTION_SYSTEM,
+    COMPACTION_USER,
     REASONING_SYSTEM,
     REASONING_USER,
     SELF_ASSESSMENT_SYSTEM,
@@ -156,6 +158,260 @@ def _format_query_result(result: list) -> str:
     return "\n".join(lines)
 
 
+ChatTurn = dict[str, object]
+"""A single turn in chat history: question, answer, actions_log, section_ids."""
+
+# Max rows from a graph query result to keep in full-detail turns.
+_MAX_RESULT_ROWS = 15
+# Max sentences from section text to keep in full-detail turns.
+_MAX_SECTION_SENTENCES = 5
+# Default token budget for the conversation context block.
+_DEFAULT_CONTEXT_MAX_TOKENS = 4000
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate (~4 chars per token)."""
+    return len(text) // 4
+
+
+def _truncate_graph_obs(obs: str, max_rows: int = _MAX_RESULT_ROWS) -> str:
+    """Truncate graph query observation at row (line) boundaries."""
+    if not obs or obs == "(no results)":
+        return obs
+    rows = obs.split("\n")
+    if len(rows) <= max_rows:
+        return obs
+    kept = "\n".join(rows[:max_rows])
+    return f"{kept}\n... ({len(rows)} rows total, showing first {max_rows})"
+
+
+def _truncate_section_obs(obs: str, max_sentences: int = _MAX_SECTION_SENTENCES) -> str:
+    """Truncate section text at sentence boundaries."""
+    if not obs:
+        return obs
+    sentences: list[str] = []
+    current = ""
+    for char in obs:
+        current += char
+        if char in ".!?" and len(current.strip()) > 1:
+            sentences.append(current.strip())
+            current = ""
+    if current.strip():
+        sentences.append(current.strip())
+
+    if len(sentences) <= max_sentences:
+        return obs
+    kept = " ".join(sentences[:max_sentences])
+    return f"{kept} [...{len(sentences)} sentences total]"
+
+
+def _summarize_turn_actions(actions: list[dict[str, str]]) -> str:
+    """Produce a compact summary of actions for older (compressed) turns.
+
+    Lists Cypher queries and key entity names found — so the LLM knows
+    what data was already explored.
+    """
+    if not actions:
+        return ""
+    queries: list[str] = []
+    entities_found: list[str] = []
+    for act in actions:
+        tool = act.get("tool", "")
+        if tool == "ANSWER":
+            continue
+        if tool == "GRAPH_QUERY":
+            queries.append(act.get("args", ""))
+            obs = act.get("observation", "")
+            if obs and obs != "(no results)":
+                for line in obs.split("\n")[:8]:
+                    parts = line.split(" | ")
+                    if parts and parts[0].strip():
+                        name = parts[0].strip()
+                        if name and name not in entities_found:
+                            entities_found.append(name)
+    summary_parts: list[str] = []
+    if queries:
+        summary_parts.append(f"    Queries: {len(queries)} graph queries executed")
+    if entities_found:
+        summary_parts.append(f"    Entities found: {', '.join(entities_found[:10])}")
+    return "\n".join(summary_parts)
+
+
+def _format_turn_full(turn: ChatTurn, turn_num: int) -> str:
+    """Format a single turn with full graph query results."""
+    question = turn.get("question", "")
+    answer = turn.get("answer", "")
+    actions: list[dict[str, str]] = turn.get("actions_log", [])  # type: ignore[assignment]
+
+    lines: list[str] = [f"Turn {turn_num}:"]
+    lines.append(f"  Question: {question}")
+
+    if actions:
+        query_lines: list[str] = []
+        for act in actions:
+            tool = act.get("tool", "")
+            if tool == "ANSWER":
+                continue
+            args = act.get("args", "")
+            obs = act.get("observation", "")
+            if tool == "GRAPH_QUERY":
+                obs = _truncate_graph_obs(obs)
+                entry = f"    {args}"
+                if obs and obs != "(no results)":
+                    entry += f" → {obs}"
+                elif obs == "(no results)":
+                    entry += " → (no results)"
+                query_lines.append(entry)
+            elif tool == "SECTION_TEXT":
+                obs = _truncate_section_obs(obs)
+                entry = f"    SECTION_TEXT({args}) → {obs}" if obs else f"    SECTION_TEXT({args})"
+                query_lines.append(entry)
+        if query_lines:
+            lines.append("  Graph queries & results:")
+            lines.extend(query_lines)
+
+    lines.append(f"  Answer: {answer}")
+    return "\n".join(lines)
+
+
+def _format_turn_compact(turn: ChatTurn, turn_num: int) -> str:
+    """Format a turn with only entity summary (no full results)."""
+    question = turn.get("question", "")
+    answer = turn.get("answer", "")
+    actions: list[dict[str, str]] = turn.get("actions_log", [])  # type: ignore[assignment]
+
+    lines: list[str] = [f"Turn {turn_num}:"]
+    lines.append(f"  Question: {question}")
+    if actions:
+        summary = _summarize_turn_actions(actions)
+        if summary:
+            lines.append("  Context from this turn:")
+            lines.append(summary)
+    lines.append(f"  Answer: {answer}")
+    return "\n".join(lines)
+
+
+def _format_turns_for_compaction(turns: list[ChatTurn]) -> str:
+    """Format turns for the compaction LLM prompt (full detail)."""
+    parts: list[str] = []
+    for i, turn in enumerate(turns):
+        parts.append(_format_turn_full(turn, i + 1))
+    return "\n\n".join(parts)
+
+
+async def compact_history(
+    turns: list[ChatTurn],
+    llm: LLMClient,
+    existing_summary: str = "",
+) -> str:
+    """Use LLM to produce a structured summary of conversation turns.
+
+    If an existing_summary is provided (from prior compaction), it is
+    included so the new summary builds on top of it.
+    """
+    turns_text = _format_turns_for_compaction(turns)
+    if existing_summary:
+        turns_text = (
+            f"PREVIOUS SUMMARY (from earlier turns):\n{existing_summary}\n\n"
+            f"NEW TURNS TO INCORPORATE:\n{turns_text}"
+        )
+
+    from synapse.llm.templates import safe_format
+
+    user_prompt = safe_format(COMPACTION_USER, turns_text=turns_text)
+
+    try:
+        summary = await llm.complete(
+            system=COMPACTION_SYSTEM,
+            user=user_prompt,
+            temperature=0.0,
+            max_tokens=1024,
+        )
+        return summary.strip()
+    except Exception as e:
+        logger.warning("Compaction LLM call failed: %s", e)
+        # Fallback: entity-based summary without LLM
+        parts: list[str] = []
+        for turn in turns:
+            actions: list[dict[str, str]] = turn.get("actions_log", [])  # type: ignore[assignment]
+            summary = _summarize_turn_actions(actions)
+            if summary:
+                parts.append(summary)
+        return "\n".join(parts) if parts else ""
+
+
+def _build_conversation_context(
+    chat_history: list[ChatTurn],
+    cached_summary: str = "",
+    compacted_turns: int = 0,
+    max_tokens: int = _DEFAULT_CONTEXT_MAX_TOKENS,
+) -> str:
+    """Format previous turns for injection into the reasoning prompt.
+
+    Uses a token budget: fills from newest turns backward with full detail.
+    If a cached LLM summary exists for older turns, it's prepended.
+    If budget is still exceeded, older full turns degrade to compact form.
+    """
+    if not chat_history:
+        return ""
+
+    # Turns that haven't been compacted yet
+    uncompacted = chat_history[compacted_turns:]
+    if not uncompacted and not cached_summary:
+        return ""
+
+    header = "═══ CONVERSATION CONTEXT (previous turns) ═══\n"
+    footer = "\n═══ CURRENT QUESTION ═══\n"
+    overhead = _estimate_tokens(header + footer)
+    budget = max_tokens - overhead
+
+    # Reserve space for cached summary if present
+    summary_block = ""
+    if cached_summary:
+        summary_block = f"[Summary of turns 1–{compacted_turns}]\n{cached_summary}\n"
+        budget -= _estimate_tokens(summary_block)
+
+    # Build turn blocks from newest to oldest, tracking budget
+    turn_blocks: list[tuple[int, str]] = []  # (original_index, formatted_text)
+    tokens_used = 0
+
+    for rev_idx, turn in enumerate(reversed(uncompacted)):
+        original_idx = len(chat_history) - 1 - rev_idx
+        turn_num = original_idx + 1
+
+        # Try full format first
+        full_text = _format_turn_full(turn, turn_num)
+        full_tokens = _estimate_tokens(full_text)
+
+        if tokens_used + full_tokens <= budget:
+            turn_blocks.append((original_idx, full_text))
+            tokens_used += full_tokens
+        else:
+            # Try compact format
+            compact_text = _format_turn_compact(turn, turn_num)
+            compact_tokens = _estimate_tokens(compact_text)
+            if tokens_used + compact_tokens <= budget:
+                turn_blocks.append((original_idx, compact_text))
+                tokens_used += compact_tokens
+            else:
+                # Budget exhausted — skip remaining older turns
+                break
+
+    # Reverse to chronological order
+    turn_blocks.reverse()
+
+    parts: list[str] = []
+    if summary_block:
+        parts.append(summary_block)
+    for _, text in turn_blocks:
+        parts.append(text)
+
+    if not parts:
+        return ""
+
+    return header + "\n".join(parts) + footer
+
+
 def _build_evidence_summary(actions_log: list[dict[str, str]]) -> str:
     """Build a concise summary of evidence gathered during reasoning for self-assessment."""
     evidence_parts: list[str] = []
@@ -250,6 +506,7 @@ async def _enrich_from_answer(
 def _log_episode(
     result: ReasoningResult,
     store: InstanceStore | None,
+    session_id: str | None = None,
 ) -> None:
     """Persist a reasoning episode to the instance store."""
     if not store:
@@ -275,6 +532,7 @@ def _log_episode(
             assessment_gaps=assessment.gaps,
             entities_added=enrichment.entities_added,
             rels_added=enrichment.relationships_added,
+            session_id=session_id,
         )
     except Exception as e:
         logger.warning("Failed to log reasoning episode: %s", e)
@@ -295,6 +553,11 @@ async def reason(
     reasoning_timeout: float = 300,
     step_max_tokens: int = 2048,
     store: InstanceStore | None = None,
+    chat_history: list[ChatTurn] | None = None,
+    session_id: str | None = None,
+    cached_summary: str = "",
+    compacted_turns: int = 0,
+    context_max_tokens: int = _DEFAULT_CONTEXT_MAX_TOKENS,
 ) -> str:
     """Execute a ReAct reasoning loop to answer a question.
 
@@ -313,6 +576,11 @@ async def reason(
         reasoning_timeout=reasoning_timeout,
         step_max_tokens=step_max_tokens,
         store=store,
+        chat_history=chat_history,
+        session_id=session_id,
+        cached_summary=cached_summary,
+        compacted_turns=compacted_turns,
+        context_max_tokens=context_max_tokens,
     )
     return result.answer
 
@@ -329,6 +597,11 @@ async def reason_full(
     reasoning_timeout: float = 300,
     step_max_tokens: int = 2048,
     store: InstanceStore | None = None,
+    chat_history: list[ChatTurn] | None = None,
+    session_id: str | None = None,
+    cached_summary: str = "",
+    compacted_turns: int = 0,
+    context_max_tokens: int = _DEFAULT_CONTEXT_MAX_TOKENS,
 ) -> ReasoningResult:
     """Execute a ReAct reasoning loop with enrichment, self-assessment, and episode logging.
 
@@ -357,10 +630,17 @@ async def reason_full(
         entity_types=", ".join(sorted(ontology.entity_types.keys())),
         relationship_types=", ".join(sorted(ontology.relationship_types.keys())),
     )
+    conversation_context = _build_conversation_context(
+        chat_history or [],
+        cached_summary=cached_summary,
+        compacted_turns=compacted_turns,
+        max_tokens=context_max_tokens,
+    )
     user_formatted = safe_format(
         user_template,
         question=question,
         section_summaries=section_summaries,
+        conversation_context=conversation_context,
     )
 
     messages = [
@@ -552,6 +832,6 @@ async def reason_full(
     )
 
     # Phase 5: Log episode to SQLite
-    _log_episode(result, store)
+    _log_episode(result, store, session_id=session_id)
 
     return result

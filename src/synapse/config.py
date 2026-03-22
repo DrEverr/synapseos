@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     bootstrap_model: str = ""
     extraction_model: str = ""
     chat_model: str = ""
+    compaction_model: str = "google/gemini-2.0-flash-001"
 
     # FalkorDB
     falkordb_host: str = "localhost"
@@ -72,6 +73,8 @@ class Settings(BaseSettings):
     doom_loop_threshold: int = 5
     reasoning_timeout: float = 300
     reasoning_step_max_tokens: int = 2048
+    chat_context_max_tokens: int = 4000
+    compaction_threshold_turns: int = 4
 
     # Bootstrap
     bootstrap_sample_pages: int = 30

@@ -78,12 +78,13 @@ Action: SECTION_TEXT(section_id)
 Action: ANSWER(your final answer)"""
 
 
-REASONING_USER = """USER QUESTION: {question}
+REASONING_USER = """{conversation_context}USER QUESTION: {question}
 
 RELEVANT SECTIONS (from tree search):
 {section_summaries}
 
-Think step by step. Use GRAPH_QUERY to explore the knowledge graph. When you have enough information, use ANSWER."""
+Think step by step. Use GRAPH_QUERY to explore the knowledge graph. When you have enough information, use ANSWER.
+If prior turns already fetched relevant data, reuse it instead of re-querying."""
 
 
 SELF_ASSESSMENT_SYSTEM = "You are a critical evaluator of AI-generated answers."
@@ -139,3 +140,26 @@ Return a JSON object with:
 - "relationships": [...] — array of new relationships
 
 Return ONLY the JSON. If nothing new, return {{"entities": [], "relationships": []}}."""
+
+
+COMPACTION_SYSTEM = "You are a conversation summarizer for a knowledge graph reasoning system."
+
+COMPACTION_USER = """Summarize the following conversation turns into a compact context block.
+The summary will be injected into future prompts so the reasoning agent knows what was
+already discussed and what data was already fetched from the graph.
+
+CONVERSATION TURNS:
+{turns_text}
+
+Write a structured summary with these sections:
+- **Goal**: What is the user trying to find out across these turns?
+- **Key entities**: Entity names and types discovered (e.g., "Jan Kowalski (Person, CEO)")
+- **Graph data fetched**: Important facts retrieved from the knowledge graph, as bullet points
+- **Established context**: Resolved references and conclusions (e.g., "the company = Acme Corp")
+
+RULES:
+1. Keep it concise — under 300 words.
+2. Preserve ALL entity names, types, and relationships exactly as they appeared.
+3. Include Cypher patterns that returned useful data, so the agent can build on them.
+4. Do NOT include your own reasoning or commentary — only factual summaries.
+5. Write in the same language as the conversation."""

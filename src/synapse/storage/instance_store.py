@@ -76,8 +76,18 @@ CREATE TABLE IF NOT EXISTS bootstrap_sources (
     processed_at   TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    session_id       TEXT PRIMARY KEY,
+    name             TEXT DEFAULT '',
+    started_at       TEXT NOT NULL,
+    domain           TEXT DEFAULT '',
+    summary          TEXT DEFAULT '',
+    compacted_turns  INTEGER DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS reasoning_episodes (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id       TEXT REFERENCES chat_sessions(session_id),
     question         TEXT NOT NULL,
     answer           TEXT NOT NULL,
     steps_taken      INTEGER DEFAULT 0,
@@ -343,6 +353,79 @@ class InstanceStore:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    # ── Chat Sessions ────────────────────────────────────────
+
+    def create_session(
+        self, session_id: str, domain: str = "", name: str = ""
+    ) -> str:
+        """Create a new chat session. Returns the session_id."""
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "INSERT INTO chat_sessions (session_id, name, started_at, domain) "
+            "VALUES (?, ?, ?, ?)",
+            (session_id, name, now, domain),
+        )
+        self._conn.commit()
+        logger.info("Created chat session %s (name=%r)", session_id, name)
+        return session_id
+
+    def rename_session(self, session_id: str, name: str) -> None:
+        """Set or update the display name of a session."""
+        self._conn.execute(
+            "UPDATE chat_sessions SET name = ? WHERE session_id = ?",
+            (name, session_id),
+        )
+        self._conn.commit()
+
+    def update_session_summary(
+        self, session_id: str, summary: str, compacted_turns: int
+    ) -> None:
+        """Store or update the compacted summary for a session."""
+        self._conn.execute(
+            "UPDATE chat_sessions SET summary = ?, compacted_turns = ? "
+            "WHERE session_id = ?",
+            (summary, compacted_turns, session_id),
+        )
+        self._conn.commit()
+
+    def get_last_session(self) -> dict[str, Any] | None:
+        """Return the most recent chat session, or None."""
+        row = self._conn.execute(
+            "SELECT * FROM chat_sessions ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_session_by_name(self, name: str) -> dict[str, Any] | None:
+        """Find a session by its display name (exact match)."""
+        row = self._conn.execute(
+            "SELECT * FROM chat_sessions WHERE name = ? ORDER BY started_at DESC LIMIT 1",
+            (name,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
+        """List recent sessions, newest first."""
+        rows = self._conn.execute(
+            "SELECT cs.*, COUNT(re.id) AS episode_count "
+            "FROM chat_sessions cs "
+            "LEFT JOIN reasoning_episodes re ON re.session_id = cs.session_id "
+            "GROUP BY cs.session_id "
+            "ORDER BY cs.started_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_session_episodes(
+        self, session_id: str, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Retrieve reasoning episodes for a specific session, oldest first."""
+        rows = self._conn.execute(
+            "SELECT * FROM reasoning_episodes WHERE session_id = ? "
+            "ORDER BY id ASC LIMIT ?",
+            (session_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     # ── Reasoning Episodes ────────────────────────────────────
 
     def store_reasoning_episode(
@@ -364,17 +447,19 @@ class InstanceStore:
         assessment_gaps: list[str] | None = None,
         entities_added: int = 0,
         rels_added: int = 0,
+        session_id: str | None = None,
     ) -> int:
         """Store a complete reasoning episode for later analysis."""
         now = datetime.now(timezone.utc).isoformat()
         cur = self._conn.execute(
             "INSERT INTO reasoning_episodes "
-            "(question, answer, steps_taken, empty_results, timed_out, max_steps_reached, "
+            "(session_id, question, answer, steps_taken, empty_results, timed_out, max_steps_reached, "
             "doom_loop_triggered, elapsed_seconds, section_ids, actions_log, "
             "confidence, groundedness, completeness, assessment_reasoning, assessment_gaps, "
             "entities_added, rels_added, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
+                session_id,
                 question,
                 answer,
                 steps_taken,

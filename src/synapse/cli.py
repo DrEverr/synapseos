@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import sys
+import uuid
 from pathlib import Path
 
 import click
@@ -234,8 +235,10 @@ def ingest(ctx: click.Context, paths: tuple[str, ...], reset: bool, dry_run: boo
 @main.command()
 @click.option("--query", "-q", default=None, help="Single query (non-interactive)")
 @click.option("--verbose", "-v", is_flag=True, help="Show reasoning trace")
+@click.option("--resume", "-r", is_flag=True, help="Resume last chat session")
+@click.option("--session", "-s", default=None, help="Resume a named session")
 @click.pass_context
-def chat(ctx: click.Context, query: str | None, verbose: bool) -> None:
+def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, session: str | None) -> None:
     """Chat with the knowledge graph using multi-hop reasoning."""
     settings: Settings = ctx.obj["settings"]
 
@@ -246,7 +249,6 @@ def chat(ctx: click.Context, query: str | None, verbose: bool) -> None:
     store = settings.get_instance_store()
     ontology = OntologyRegistry(store=store, ontology_name=settings.ontology)
 
-    from synapse.chat.reasoning import reason
     from synapse.llm.client import LLMClient
     from synapse.storage.graph import GraphStore
     from synapse.storage.text_cache import TextCache
@@ -272,9 +274,78 @@ def chat(ctx: click.Context, query: str | None, verbose: bool) -> None:
 
     domain = store.get_meta("domain", "unknown")
 
+    from synapse.chat.reasoning import compact_history, reason_full
+
+    # ── Session setup: resume existing or create new ──────────
+    chat_history: list[dict[str, object]] = []
+    cached_summary = ""
+    compacted_turns = 0
+
+    resumed_session = None
+    if session:
+        resumed_session = store.get_session_by_name(session)
+        if not resumed_session:
+            click.echo(f"Error: No session named '{session}'. Use /sessions to list.")
+            sys.exit(1)
+    elif resume:
+        resumed_session = store.get_last_session()
+        if not resumed_session:
+            click.echo("No previous session found. Starting a new one.")
+
+    if resumed_session:
+        session_id = resumed_session["session_id"]
+        session_name = resumed_session.get("name", "")
+        cached_summary = resumed_session.get("summary", "") or ""
+        compacted_turns = resumed_session.get("compacted_turns", 0) or 0
+        # Rebuild chat_history from stored episodes
+        episodes = store.get_session_episodes(session_id)
+        for ep in episodes:
+            chat_history.append({
+                "question": ep["question"],
+                "answer": ep["answer"],
+                "actions_log": json.loads(ep["actions_log"]) if isinstance(ep["actions_log"], str) else ep["actions_log"],
+                "section_ids": json.loads(ep["section_ids"]) if isinstance(ep["section_ids"], str) else ep["section_ids"],
+            })
+        label = f"'{session_name}'" if session_name else session_id[:8]
+        click.echo(f"Resumed session {label} ({len(episodes)} previous turns)")
+    else:
+        session_id = str(uuid.uuid4())
+        session_name = ""
+        store.create_session(session_id, domain=domain)
+
+    # Compaction LLM client (cheap/fast model)
+    compaction_model = settings.compaction_model
+    compaction_llm = LLMClient(
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
+        model=compaction_model,
+        timeout=settings.llm_timeout,
+    )
+
+    def _run_compaction() -> None:
+        """Compact older turns into a summary using the compaction LLM."""
+        nonlocal cached_summary, compacted_turns
+        uncompacted_count = len(chat_history) - compacted_turns
+        if uncompacted_count <= settings.compaction_threshold_turns:
+            return
+        # Compact all but the last 2 turns (keep recent ones full)
+        turns_to_compact = chat_history[compacted_turns:-2] if len(chat_history) > 2 else []
+        if not turns_to_compact:
+            return
+        click.echo("  [compacting conversation context...]")
+        new_summary = asyncio.run(
+            compact_history(turns_to_compact, compaction_llm, cached_summary)
+        )
+        if new_summary:
+            new_compacted = len(chat_history) - 2
+            cached_summary = new_summary
+            compacted_turns = new_compacted
+            store.update_session_summary(session_id, cached_summary, compacted_turns)
+            click.echo(f"  [compacted {new_compacted} turns into summary]")
+
     if query:
-        answer = asyncio.run(
-            reason(
+        result = asyncio.run(
+            reason_full(
                 question=query,
                 graph=graph,
                 llm=llm,
@@ -286,12 +357,17 @@ def chat(ctx: click.Context, query: str | None, verbose: bool) -> None:
                 reasoning_timeout=settings.reasoning_timeout,
                 step_max_tokens=settings.reasoning_step_max_tokens,
                 store=store,
+                session_id=session_id,
+                cached_summary=cached_summary,
+                compacted_turns=compacted_turns,
+                context_max_tokens=settings.chat_context_max_tokens,
             )
         )
-        click.echo(f"\nAnswer: {answer}")
+        click.echo(f"\nAnswer: {result.answer}")
     else:
-        click.echo(f"SynapseOS Chat — {domain} ({node_count} nodes)")
-        click.echo("Type 'quit' to exit.")
+        label = f"'{session_name}'" if session_name else session_id[:8]
+        click.echo(f"SynapseOS Chat — {domain} ({node_count} nodes) [session {label}]")
+        click.echo("Type 'quit' to exit. Commands: /name <n>, /sessions, /history, /compact")
         click.echo("-" * 40)
         while True:
             try:
@@ -302,8 +378,50 @@ def chat(ctx: click.Context, query: str | None, verbose: bool) -> None:
             if not user_input or user_input.lower() in ("quit", "exit", "q"):
                 click.echo("Bye!")
                 break
-            answer = asyncio.run(
-                reason(
+
+            # ── Slash commands ────────────────────────────
+            if user_input.startswith("/name "):
+                new_name = user_input[6:].strip()
+                if new_name:
+                    store.rename_session(session_id, new_name)
+                    session_name = new_name
+                    click.echo(f"Session named '{new_name}'")
+                else:
+                    click.echo("Usage: /name <session-name>")
+                continue
+
+            if user_input == "/sessions":
+                sessions = store.list_sessions()
+                if not sessions:
+                    click.echo("No sessions found.")
+                else:
+                    for s in sessions:
+                        name_part = f" '{s['name']}'" if s.get("name") else ""
+                        active = " (current)" if s["session_id"] == session_id else ""
+                        click.echo(
+                            f"  {s['session_id'][:8]}{name_part} — "
+                            f"{s['episode_count']} turns — {s['started_at'][:16]}{active}"
+                        )
+                continue
+
+            if user_input == "/history":
+                if not chat_history:
+                    click.echo("No turns in this session yet.")
+                else:
+                    for i, turn in enumerate(chat_history, 1):
+                        q = turn.get("question", "")
+                        a = str(turn.get("answer", ""))
+                        compact_marker = " (compacted)" if i <= compacted_turns else ""
+                        click.echo(f"  [{i}]{compact_marker} Q: {q}")
+                        click.echo(f"      A: {a[:120]}{'...' if len(a) > 120 else ''}")
+                continue
+
+            if user_input == "/compact":
+                _run_compaction()
+                continue
+
+            result = asyncio.run(
+                reason_full(
                     question=user_input,
                     graph=graph,
                     llm=llm,
@@ -315,9 +433,43 @@ def chat(ctx: click.Context, query: str | None, verbose: bool) -> None:
                     reasoning_timeout=settings.reasoning_timeout,
                     step_max_tokens=settings.reasoning_step_max_tokens,
                     store=store,
+                    chat_history=chat_history,
+                    session_id=session_id,
+                    cached_summary=cached_summary,
+                    compacted_turns=compacted_turns,
+                    context_max_tokens=settings.chat_context_max_tokens,
                 )
             )
-            click.echo(f"\nSynapseOS: {answer}")
+            chat_history.append({
+                "question": user_input,
+                "answer": result.answer,
+                "actions_log": result.actions_log,
+                "section_ids": result.section_ids_used,
+            })
+            click.echo(f"\nSynapseOS: {result.answer}")
+
+            # Auto-name session after first turn (if unnamed)
+            if len(chat_history) == 1 and not session_name:
+                try:
+                    auto_name = asyncio.run(
+                        compaction_llm.complete(
+                            system="Generate a short session name (2-5 words, lowercase, no quotes) "
+                                   "that captures the topic of this question. Reply with ONLY the name.",
+                            user=user_input,
+                            temperature=0.0,
+                            max_tokens=20,
+                        )
+                    )
+                    auto_name = auto_name.strip().strip("\"'").lower()
+                    if auto_name:
+                        store.rename_session(session_id, auto_name)
+                        session_name = auto_name
+                        click.echo(f"  [session: '{auto_name}']")
+                except Exception:
+                    pass  # non-critical, skip silently
+
+            # Auto-compact when threshold exceeded
+            _run_compaction()
 
     store.close()
 
