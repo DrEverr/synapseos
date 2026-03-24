@@ -110,9 +110,9 @@ def init(ctx: click.Context, paths: tuple[str, ...]) -> None:
         click.echo("Error: SYNAPSE_LLM_API_KEY is not set.")
         sys.exit(1)
 
-    pdf_files = _resolve_pdf_paths(paths)
+    pdf_files = _resolve_document_paths(paths)
     if not pdf_files:
-        click.echo("Error: no PDF files found.")
+        click.echo("Error: no supported documents found.")
         sys.exit(1)
 
     store = settings.get_instance_store()
@@ -124,7 +124,7 @@ def init(ctx: click.Context, paths: tuple[str, ...]) -> None:
         if not click.confirm("Re-bootstrap? (creates a new ontology version)"):
             return
 
-    click.echo(f"Bootstrapping from {len(pdf_files)} PDF(s):")
+    click.echo(f"Bootstrapping from {len(pdf_files)} document(s):")
     for f in pdf_files:
         click.echo(f"  {f}")
     click.echo(f"Model: {settings.llm_model}")
@@ -186,12 +186,12 @@ def ingest(ctx: click.Context, paths: tuple[str, ...], reset: bool, dry_run: boo
         store.close()
         sys.exit(1)
 
-    pdf_files = _resolve_pdf_paths(paths)
+    pdf_files = _resolve_document_paths(paths)
     if not pdf_files:
-        click.echo("Error: no PDF files found.")
+        click.echo("Error: no supported documents found.")
         sys.exit(1)
 
-    click.echo(f"Ingesting {len(pdf_files)} PDF(s):")
+    click.echo(f"Ingesting {len(pdf_files)} document(s):")
     for f in pdf_files:
         click.echo(f"  {f}")
     click.echo(f"Domain: {store.get_meta('domain')}")
@@ -311,7 +311,16 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
     else:
         session_id = str(uuid.uuid4())
         session_name = ""
-        store.create_session(session_id, domain=domain)
+        # Session created lazily on first question via _ensure_session()
+
+    _session_created = bool(resumed_session)
+
+    def _ensure_session() -> None:
+        """Create the session in DB on first use (lazy)."""
+        nonlocal _session_created
+        if not _session_created:
+            store.create_session(session_id, domain=domain)
+            _session_created = True
 
     # Compaction LLM client (cheap/fast model)
     compaction_model = settings.compaction_model
@@ -344,6 +353,7 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
             click.echo(f"  [compacted {new_compacted} turns into summary]")
 
     if query:
+        _ensure_session()
         result = asyncio.run(
             reason_full(
                 question=query,
@@ -369,6 +379,12 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
         click.echo(f"SynapseOS Chat — {domain} ({node_count} nodes) [session {label}]")
         click.echo("Type 'quit' to exit. Commands: /name <n>, /sessions, /history, /compact")
         click.echo("-" * 40)
+        # Show previous turns for resumed sessions
+        if chat_history:
+            for turn in chat_history:
+                compact_marker = ""
+                click.echo(f"\nYou{compact_marker}: {turn['question']}")
+                click.echo(f"\nSynapseOS: {turn['answer']}")
         while True:
             try:
                 user_input = input("\nYou: ").strip()
@@ -420,6 +436,7 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
                 _run_compaction()
                 continue
 
+            _ensure_session()
             result = asyncio.run(
                 reason_full(
                     question=user_input,
@@ -787,30 +804,35 @@ def versions(ctx: click.Context, activate: int | None, export_id: int | None) ->
 # ══════════════════════════════════════════════════════════════
 
 
-def _resolve_pdf_paths(paths: tuple[str, ...]) -> list[str]:
-    """Resolve paths to a list of PDF file paths."""
+def _resolve_document_paths(paths: tuple[str, ...]) -> list[str]:
+    """Resolve paths to a list of supported document files (PDF, Markdown, text, HTML, email)."""
     import glob as globmod
 
-    pdf_files: list[str] = []
+    from synapse.parsers import SUPPORTED_EXTENSIONS, is_supported
+
+    files: list[str] = []
     for p in paths:
         path = Path(p)
         if path.is_dir():
-            pdf_files.extend(str(f) for f in sorted(path.glob("*.pdf")))
-            pdf_files.extend(str(f) for f in sorted(path.glob("*.PDF")))
-        elif path.is_file() and path.suffix.lower() == ".pdf":
-            pdf_files.append(str(path))
+            for ext in SUPPORTED_EXTENSIONS:
+                files.extend(str(f) for f in sorted(path.glob(f"*{ext}")))
+                files.extend(str(f) for f in sorted(path.glob(f"*{ext.upper()}")))
+        elif path.is_file() and is_supported(str(path)):
+            files.append(str(path))
+        elif path.is_file():
+            click.echo(f"Warning: unsupported file type '{path.suffix}' — skipping '{p}'")
         else:
             matches = sorted(globmod.glob(p))
-            matched = [m for m in matches if m.lower().endswith(".pdf")]
+            matched = [m for m in matches if is_supported(m)]
             if matched:
-                pdf_files.extend(matched)
+                files.extend(matched)
             else:
-                click.echo(f"Warning: no PDF files matched '{p}'")
+                click.echo(f"Warning: no supported documents matched '{p}'")
 
     # Deduplicate
     seen: set[str] = set()
     unique: list[str] = []
-    for f in pdf_files:
+    for f in files:
         resolved = str(Path(f).resolve())
         if resolved not in seen:
             seen.add(resolved)

@@ -32,7 +32,8 @@ from synapse.bootstrap.prompts import (
 )
 from synapse.config import Settings
 from synapse.llm.client import LLMClient
-from synapse.parsers.pdf import extract_pages, pages_to_tagged_text
+from synapse.parsers import extract_pages
+from synapse.parsers.pdf import pages_to_tagged_text
 from synapse.storage.instance_store import InstanceStore
 
 logger = logging.getLogger(__name__)

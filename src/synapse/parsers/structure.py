@@ -8,7 +8,8 @@ import re
 
 from synapse.llm.client import LLMClient
 from synapse.models.document import Document, Section
-from synapse.parsers.pdf import estimate_tokens, extract_pages, pages_to_tagged_text
+from synapse.parsers import extract_pages
+from synapse.parsers.pdf import estimate_tokens, pages_to_tagged_text
 
 logger = logging.getLogger(__name__)
 
@@ -419,7 +420,7 @@ async def extract_document_structure(
     doc = Document(
         id=doc_id,
         filename=filename,
-        title=filename.replace(".pdf", "").replace(".PDF", ""),
+        title=re.sub(r"\.(pdf|md|txt|text|html|htm|eml)$", "", filename, flags=re.IGNORECASE),
         page_count=total_pages,
         pages=pages,
         sections=sections,

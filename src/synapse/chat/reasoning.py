@@ -51,10 +51,21 @@ _CYPHER_WRITE_KEYWORDS = re.compile(
 def _sanitize_cypher(raw: str) -> str:
     """Sanitize LLM-generated Cypher before execution."""
     cypher = raw.strip()
+    # Strip 'cypher:' prefix some models prepend
+    if cypher.lower().startswith("cypher:"):
+        cypher = cypher[7:].strip()
+    # Strip wrapping quotes
     if (cypher.startswith('"') and cypher.endswith('"')) or (
         cypher.startswith("'") and cypher.endswith("'")
     ):
         cypher = cypher[1:-1].strip()
+    # Strip markdown code fences
+    if cypher.startswith("```"):
+        cypher = cypher.lstrip("`").strip()
+        if cypher.lower().startswith("cypher"):
+            cypher = cypher[6:].strip()
+        if cypher.endswith("```"):
+            cypher = cypher[:-3].strip()
     while cypher.endswith(")") and cypher.count("(") < cypher.count(")"):
         cypher = cypher[:-1].strip()
     if _CYPHER_WRITE_KEYWORDS.search(cypher):
@@ -103,20 +114,44 @@ def _truncate_to_first_action(text: str) -> tuple[str, bool]:
 def _parse_action(text: str) -> tuple[str, str, bool] | None:
     """Parse the first action from the LLM response."""
     text, was_multi = _truncate_to_first_action(text)
+
+    # Standard format: Action: TOOL(args) — for single-line tools
     match = re.search(
-        r"Action:\s*(GRAPH_QUERY|SECTION_TEXT|ANSWER)\s*\((.+)\)\s*$",
+        r"Action:\s*(GRAPH_QUERY|SECTION_TEXT)\s*\((.+)\)\s*$",
         text,
-        re.MULTILINE | re.DOTALL,
+        re.MULTILINE,
     )
     if match:
         tool = match.group(1)
         args = match.group(2).strip()
-        if args.endswith(")") and args.count("(") < args.count(")"):
-            args = args[:-1]
         return tool, args, was_multi
-    match = re.search(r"Action:\s*ANSWER\s*\(\s*([\s\S]+?)(?:\)\s*$)", text, re.MULTILINE)
+
+    # ANSWER format — can be multi-line, greedy match to last closing paren
+    match = re.search(
+        r"Action:\s*ANSWER\s*\(\s*([\s\S]+)\)\s*$",
+        text,
+    )
     if match:
-        return "ANSWER", match.group(1).strip(), was_multi
+        args = match.group(1).strip()
+        # Strip trailing ) if unbalanced (answer text may contain parens)
+        while args.endswith(")") and args.count("(") < args.count(")"):
+            args = args[:-1].rstrip()
+        return "ANSWER", args, was_multi
+
+    # Some models emit [TOOL_CALL] wrapper instead of Action: format
+    tc_match = re.search(
+        r'\[TOOL_CALL\]\s*\{tool\s*=>\s*"(\w+)".*?--text\s+"(.*?)"\s*\}\s*\}\s*\[/TOOL_CALL\]',
+        text,
+        re.DOTALL,
+    )
+    if tc_match:
+        tool = tc_match.group(1).upper()
+        args = tc_match.group(2).strip()
+        if tool == "ANSWER":
+            return "ANSWER", args, was_multi
+        if tool in ("GRAPH_QUERY", "SECTION_TEXT"):
+            return tool, args, was_multi
+
     return None
 
 
@@ -143,17 +178,18 @@ def _extract_inline_answer(text: str) -> str:
     return text.strip() if text.strip() else "I was unable to determine an answer."
 
 
-def _format_query_result(result: list) -> str:
-    """Format Cypher query results for inclusion in the conversation."""
+def _format_query_result(result: list, limit: int = 20) -> str:
+    """Format Cypher query results. Use limit=0 for all rows."""
     if not result:
         return "(no results)"
+    rows = result if limit == 0 else result[:limit]
     lines: list[str] = []
-    for row in result[:20]:
+    for row in rows:
         if isinstance(row, (list, tuple)):
             lines.append(" | ".join(str(cell) for cell in row))
         else:
             lines.append(str(row))
-    if len(result) > 20:
+    if limit and len(result) > limit:
         lines.append(f"... ({len(result)} total rows)")
     return "\n".join(lines)
 
@@ -682,6 +718,8 @@ async def reason_full(
 
         action = _parse_action(response)
         if action is None:
+            # Log the unparsed response as a "THOUGHT" step
+            actions_log.append({"tool": "THOUGHT", "args": "", "observation": response})
             if "answer" in response.lower() and step > 0:
                 answer = _extract_inline_answer(response)
                 steps_completed = step + 1
@@ -704,7 +742,7 @@ async def reason_full(
         if tool == "ANSWER":
             answer = args
             steps_completed = step + 1
-            actions_log.append({"tool": "ANSWER", "args": "", "observation": ""})
+            actions_log.append({"tool": "ANSWER", "args": "", "observation": args})
             break
 
         multi_warning = ""
@@ -717,18 +755,21 @@ async def reason_full(
                 result = graph.query(sanitized)
                 if result:
                     result_text = _format_query_result(result)
+                    result_full = _format_query_result(result, limit=0)
                     empty_result_count = 0
                 else:
                     hint = _suggest_entity_alternatives(sanitized, graph)
                     result_text = f"(no results){hint}"
+                    result_full = result_text
                     empty_result_count += 1
                     total_empty_results += 1
             except Exception as e:
                 result_text = f"(query error: {e})"
+                result_full = result_text
                 empty_result_count += 1
                 total_empty_results += 1
 
-            actions_log.append({"tool": "GRAPH_QUERY", "args": args, "observation": result_text})
+            actions_log.append({"tool": "GRAPH_QUERY", "args": args, "observation": result_full})
 
             if verbose:
                 print(f"Result: {result_text[:500]}")

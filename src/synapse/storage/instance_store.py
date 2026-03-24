@@ -125,6 +125,20 @@ class InstanceStore:
     def _init_schema(self) -> None:
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Apply schema migrations for databases created by older versions."""
+        # Check if reasoning_episodes has session_id column
+        cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(reasoning_episodes)").fetchall()
+        }
+        if "session_id" not in cols:
+            self._conn.execute(
+                "ALTER TABLE reasoning_episodes ADD COLUMN session_id TEXT DEFAULT ''"
+            )
+            self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -396,20 +410,36 @@ class InstanceStore:
         return dict(row) if row else None
 
     def get_session_by_name(self, name: str) -> dict[str, Any] | None:
-        """Find a session by its display name (exact match)."""
+        """Find a session by display name, session_id, or session_id prefix."""
+        # Exact name match
         row = self._conn.execute(
             "SELECT * FROM chat_sessions WHERE name = ? ORDER BY started_at DESC LIMIT 1",
             (name,),
         ).fetchone()
+        if row:
+            return dict(row)
+        # Exact session_id match
+        row = self._conn.execute(
+            "SELECT * FROM chat_sessions WHERE session_id = ? LIMIT 1",
+            (name,),
+        ).fetchone()
+        if row:
+            return dict(row)
+        # Prefix match on session_id (e.g. "e77bdaab" matches "e77bdaab-5a4c-...")
+        row = self._conn.execute(
+            "SELECT * FROM chat_sessions WHERE session_id LIKE ? ORDER BY started_at DESC LIMIT 1",
+            (name + "%",),
+        ).fetchone()
         return dict(row) if row else None
 
     def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
-        """List recent sessions, newest first."""
+        """List recent sessions that have at least one episode, newest first."""
         rows = self._conn.execute(
             "SELECT cs.*, COUNT(re.id) AS episode_count "
             "FROM chat_sessions cs "
-            "LEFT JOIN reasoning_episodes re ON re.session_id = cs.session_id "
+            "JOIN reasoning_episodes re ON re.session_id = cs.session_id "
             "GROUP BY cs.session_id "
+            "HAVING COUNT(re.id) > 0 "
             "ORDER BY cs.started_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
