@@ -107,6 +107,17 @@ CREATE TABLE IF NOT EXISTS reasoning_episodes (
     rels_added       INTEGER DEFAULT 0,
     created_at       TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS activity_log (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_type      TEXT NOT NULL,
+    action_id        TEXT DEFAULT '',
+    action_label     TEXT DEFAULT '',
+    item_type        TEXT NOT NULL,
+    item_name        TEXT NOT NULL,
+    item_detail      TEXT DEFAULT '',
+    created_at       TEXT NOT NULL
+);
 """
 
 
@@ -543,6 +554,69 @@ class InstanceStore:
         if not row:
             return {}
         return dict(row)
+
+    # ── Activity Log ──────────────────────────────────────────
+
+    def log_activity(
+        self,
+        action_type: str,
+        action_id: str,
+        action_label: str,
+        item_type: str,
+        item_name: str,
+        item_detail: str = "",
+    ) -> None:
+        """Log a single item added/changed by an action."""
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "INSERT INTO activity_log (action_type, action_id, action_label, "
+            "item_type, item_name, item_detail, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (action_type, action_id, action_label, item_type, item_name, item_detail, now),
+        )
+
+    def log_activity_batch(
+        self,
+        action_type: str,
+        action_id: str,
+        action_label: str,
+        items: list[tuple[str, str, str]],
+    ) -> None:
+        """Log multiple items for one action. items = [(item_type, item_name, item_detail), ...]"""
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.executemany(
+            "INSERT INTO activity_log (action_type, action_id, action_label, "
+            "item_type, item_name, item_detail, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(action_type, action_id, action_label, t, n, d, now) for t, n, d in items],
+        )
+        self._conn.commit()
+
+    def list_actions(self, limit: int = 50) -> list[dict[str, Any]]:
+        """List distinct actions with item counts, newest first."""
+        rows = self._conn.execute(
+            "SELECT action_type, action_id, action_label, "
+            "  MIN(created_at) AS started_at, "
+            "  COUNT(*) AS item_count, "
+            "  SUM(CASE WHEN item_type = 'entity' THEN 1 ELSE 0 END) AS entities, "
+            "  SUM(CASE WHEN item_type = 'relationship' THEN 1 ELSE 0 END) AS relationships, "
+            "  SUM(CASE WHEN item_type = 'entity_type' THEN 1 ELSE 0 END) AS entity_types, "
+            "  SUM(CASE WHEN item_type = 'relationship_type' THEN 1 ELSE 0 END) AS rel_types, "
+            "  SUM(CASE WHEN item_type = 'prompt' THEN 1 ELSE 0 END) AS prompts "
+            "FROM activity_log "
+            "GROUP BY action_type, action_id "
+            "ORDER BY started_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_action_items(self, action_type: str, action_id: str) -> list[dict[str, Any]]:
+        """Get all items logged for a specific action."""
+        rows = self._conn.execute(
+            "SELECT * FROM activity_log WHERE action_type = ? AND action_id = ? ORDER BY id",
+            (action_type, action_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # ── Export / Import ───────────────────────────────────────
 

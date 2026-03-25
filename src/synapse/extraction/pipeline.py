@@ -191,6 +191,9 @@ async def ingest_files(
     total_relationships = 0
     errors: list[dict] = []
 
+    import uuid as _uuid
+    ingest_id = str(_uuid.uuid4())[:8]
+
     for pdf_path in pdf_files:
         try:
             doc, entities, rels = await process_document(
@@ -205,6 +208,17 @@ async def ingest_files(
             )
             total_entities += len(entities)
             total_relationships += len(rels)
+
+            # Log to activity log
+            if not dry_run:
+                items: list[tuple[str, str, str]] = []
+                for e in entities:
+                    items.append(("entity", e.canonical_name, e.entity_type))
+                for r in rels:
+                    items.append(("relationship", f"{r.subject} → {r.predicate} → {r.object}", ""))
+                if items:
+                    label = f"Ingest: {Path(pdf_path).name}"
+                    store.log_activity_batch("ingest", ingest_id, label, items)
         except Exception as e:
             logger.error("Failed to process %s: %s", pdf_path, e)
             errors.append({"file": pdf_path, "error": str(e)})

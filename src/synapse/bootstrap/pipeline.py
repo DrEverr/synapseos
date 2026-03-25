@@ -386,6 +386,19 @@ async def bootstrap(
     store.set_meta("key_topics", json.dumps(key_topics))
     store.mark_bootstrapped(domain)
 
+    # Log to activity log
+    init_id = f"v{version_id}"
+    init_label = f"Init: {domain}"
+    items: list[tuple[str, str, str]] = []
+    for etype, desc in entity_types.items():
+        items.append(("entity_type", etype, desc))
+    for rtype, desc in relationship_types.items():
+        items.append(("relationship_type", rtype, desc))
+    for key in prompts:
+        items.append(("prompt", key, ""))
+    if items:
+        store.log_activity_batch("init", init_id, init_label, items)
+
     summary = {
         "domain": domain,
         "subdomain": subdomain,

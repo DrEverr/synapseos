@@ -169,4 +169,19 @@ async def enrich_graph_from_answer(
             logger.warning("Enrichment: failed to store relationship: %s", e)
 
     logger.info("Enrichment: %d entities added, %d relationships added", entities_added, rels_added)
+
+    # Log to activity log
+    if store and (entities_added > 0 or rels_added > 0):
+        items: list[tuple[str, str, str]] = []
+        for text, entity in entity_map.items():
+            items.append(("entity", entity.canonical_name, entity.entity_type))
+        for raw in raw_relationships:
+            s = raw.get("subject", "")
+            p = raw.get("predicate", "")
+            o = raw.get("object", "")
+            if s and p and o:
+                items.append(("relationship", f"{s} → {p} → {o}", ""))
+        if items:
+            store.log_activity_batch("chat", "enrichment", f"Chat: {question[:40]}", items)
+
     return entities_added, rels_added
