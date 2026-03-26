@@ -18,6 +18,7 @@ class Entity(BaseModel):
     properties: dict = Field(default_factory=dict)
     source_doc: str = ""
     source_section: str = ""
+    verified: bool = True
 
     def model_post_init(self, _context: object) -> None:
         if not self.canonical_name and self.text:

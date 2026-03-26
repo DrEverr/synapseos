@@ -125,6 +125,7 @@ async def enrich_graph_from_answer(
             confidence=confidence,
             source_doc="chat:enrichment",
             properties=raw.get("properties", {}),
+            verified=False,
         )
         entity_map[text] = entity
         try:
@@ -161,6 +162,7 @@ async def enrich_graph_from_answer(
             object_type=obj_type,
             confidence=confidence,
             source_doc="chat:enrichment",
+            verified=False,
         )
         try:
             graph.store_relationship(rel)

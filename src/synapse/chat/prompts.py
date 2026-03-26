@@ -40,6 +40,7 @@ All entity nodes have a `canonical_name` property (lowercase, normalized).
 • Always use toLower() and CONTAINS for entity matching.
 • Only read queries (MATCH ... RETURN). Never use CREATE, DELETE, SET, MERGE, DROP, or REMOVE.
 • Use inline string values, not $parameters.
+• IMPORTANT: Always add WHERE COALESCE(n.verified, true) = true for entity nodes to exclude unverified AI-generated data.
 
 ═══ VALID EXAMPLES ═══
 

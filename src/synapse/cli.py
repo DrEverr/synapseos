@@ -501,10 +501,11 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
 @click.option("--triples", is_flag=True, help="Show all triples")
 @click.option("--tree", is_flag=True, help="Show document trees")
 @click.option("--cypher", default=None, help="Execute Cypher query")
+@click.option("--unverified", is_flag=True, help="Show unverified (AI-generated) entities and relationships")
 @click.option("--limit", default=100, help="Limit results")
 @click.pass_context
 def inspect(
-    ctx: click.Context, duplicates: bool, triples: bool, tree: bool, cypher: str | None, limit: int
+    ctx: click.Context, duplicates: bool, triples: bool, tree: bool, cypher: str | None, unverified: bool, limit: int
 ) -> None:
     """Inspect the knowledge graph."""
     settings: Settings = ctx.obj["settings"]
@@ -516,6 +517,19 @@ def inspect(
         password=settings.falkordb_password,
         graph_name=settings.graph_name,
     )
+
+    if unverified:
+        entities = graph.get_unverified_entities()
+        rels = graph.get_unverified_relationships()
+        click.echo(f"Unverified entities ({len(entities)}):")
+        for row in entities:
+            click.echo(f"  [{row[1]}] {row[0]}  (confidence: {row[2]}, source: {row[3]})")
+        click.echo(f"\nUnverified relationships ({len(rels)}):")
+        for row in rels:
+            click.echo(f"  {row[0]} -[{row[1]}]-> {row[2]}  (confidence: {row[3]}, source: {row[4]})")
+        if not entities and not rels:
+            click.echo("  All items are verified!")
+        return
 
     if cypher:
         try:

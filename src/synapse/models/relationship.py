@@ -16,3 +16,4 @@ class Relationship(BaseModel):
     confidence: float = 0.5
     source_doc: str = ""
     source_section: str = ""
+    verified: bool = True

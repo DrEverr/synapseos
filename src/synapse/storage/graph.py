@@ -52,6 +52,8 @@ class GraphStore:
         self._graph.query(
             """MERGE (d:Document {id: $id})
                ON CREATE SET d.filename = $filename, d.title = $title,
+                            d.name = $title, d.text = $title,
+                            d.canonical_name = toLower($title),
                             d.page_count = $page_count, d.tree_structure_json = $tree_json,
                             d.ingested_at = $ingested_at
                ON MATCH SET d.tree_structure_json = $tree_json""",
@@ -71,7 +73,10 @@ class GraphStore:
             self._graph.query(
                 """MERGE (s:Section {id: $id})
                    ON CREATE SET s.document_id = $doc_id, s.node_id = $node_id,
-                                s.title = $title, s.start_page = $start,
+                                s.title = $title, s.name = $title,
+                                s.text = $title,
+                                s.canonical_name = toLower($title),
+                                s.start_page = $start,
                                 s.end_page = $end, s.summary = $summary""",
                 params={
                     "id": section_id,
@@ -101,11 +106,13 @@ class GraphStore:
             f"""MERGE (n:{label} {{canonical_name: $canonical_name}})
                 ON CREATE SET n.id = $id, n.text = $text, n.name = $text,
                              n.confidence = $confidence, n.properties = $props,
-                             n.source_docs = $source_doc
+                             n.source_docs = $source_doc,
+                             n.verified = $verified
                 ON MATCH SET n.confidence = CASE WHEN $confidence > n.confidence
                              THEN $confidence ELSE n.confidence END,
                              n.source_docs = n.source_docs + ', ' + $source_doc,
-                             n.name = $text""",
+                             n.name = $text,
+                             n.verified = CASE WHEN n.verified = true THEN true ELSE $verified END""",
             params={
                 "canonical_name": entity.canonical_name,
                 "id": entity.id,
@@ -113,6 +120,7 @@ class GraphStore:
                 "confidence": entity.confidence,
                 "props": props_json,
                 "source_doc": entity.source_doc,
+                "verified": entity.verified,
             },
         )
 
@@ -146,12 +154,14 @@ class GraphStore:
                 f"""MATCH (a:{subj_label} {{canonical_name: $subj}}),
                           (b:{obj_label} {{canonical_name: $obj}})
                     MERGE (a)-[r:{pred}]->(b)
-                    ON CREATE SET r.confidence = $confidence, r.source_doc = $source_doc""",
+                    ON CREATE SET r.confidence = $confidence, r.source_doc = $source_doc,
+                                  r.verified = $verified""",
                 params={
                     "subj": subj_name,
                     "obj": obj_name,
                     "confidence": rel.confidence,
                     "source_doc": rel.source_doc,
+                    "verified": rel.verified,
                 },
             )
         except Exception as e:
@@ -254,3 +264,65 @@ class GraphStore:
             "summary": section.summary or "",
             "children": [self._section_to_dict(c) for c in section.children],
         }
+
+    # ── Verification / Review ──────────────────────────────────
+
+    def get_unverified_entities(self) -> list:
+        """Return entities where verified=false."""
+        return self.query(
+            "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
+            "AND COALESCE(n.verified, true) = false "
+            "RETURN n.canonical_name, labels(n)[0], n.confidence, n.source_docs "
+            "ORDER BY labels(n)[0], n.canonical_name"
+        )
+
+    def get_unverified_relationships(self) -> list:
+        """Return relationships where verified=false."""
+        return self.query(
+            "MATCH (a)-[r]->(b) WHERE COALESCE(r.verified, true) = false "
+            "AND NOT a:Document AND NOT a:Section "
+            "AND NOT b:Document AND NOT b:Section "
+            "RETURN a.canonical_name, type(r), b.canonical_name, r.confidence, r.source_doc "
+            "ORDER BY type(r), a.canonical_name"
+        )
+
+    def verify_entity(self, canonical_name: str, entity_type: str) -> None:
+        """Mark an entity as verified."""
+        self._graph.query(
+            f"MATCH (n:{entity_type} {{canonical_name: $name}}) SET n.verified = true",
+            params={"name": canonical_name},
+        )
+
+    def reject_entity(self, canonical_name: str, entity_type: str) -> None:
+        """Delete an unverified entity and all its relationships."""
+        self._graph.query(
+            f"MATCH (n:{entity_type} {{canonical_name: $name}}) "
+            "WHERE COALESCE(n.verified, true) = false DETACH DELETE n",
+            params={"name": canonical_name},
+        )
+
+    def verify_relationship(self, subj: str, predicate: str, obj: str) -> None:
+        """Mark a relationship as verified."""
+        self._graph.query(
+            f"MATCH (a {{canonical_name: $subj}})-[r:{predicate}]->(b {{canonical_name: $obj}}) "
+            "SET r.verified = true",
+            params={"subj": subj, "obj": obj},
+        )
+
+    def reject_relationship(self, subj: str, predicate: str, obj: str) -> None:
+        """Delete an unverified relationship."""
+        self._graph.query(
+            f"MATCH (a {{canonical_name: $subj}})-[r:{predicate}]->(b {{canonical_name: $obj}}) "
+            "WHERE COALESCE(r.verified, true) = false DELETE r",
+            params={"subj": subj, "obj": obj},
+        )
+
+    def migrate_verified_flag(self) -> None:
+        """Set verified=true on all existing nodes/relationships that lack the flag."""
+        self._graph.query(
+            "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
+            "AND NOT exists(n.verified) SET n.verified = true"
+        )
+        self._graph.query(
+            "MATCH ()-[r]->() WHERE NOT exists(r.verified) SET r.verified = true"
+        )
