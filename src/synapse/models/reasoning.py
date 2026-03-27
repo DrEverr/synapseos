@@ -22,6 +22,15 @@ class EnrichmentResult(BaseModel):
     relationships_added: int = 0
 
 
+class ChallengeResult(BaseModel):
+    """Result from a challenger agent's review."""
+
+    agree: bool = True
+    critique: str = ""
+    issues: list[str] = Field(default_factory=list)
+    suggested_improvements: list[str] = Field(default_factory=list)
+
+
 class ReasoningResult(BaseModel):
     """Full result from a reasoning episode, including answer, metadata, and assessments."""
 
@@ -37,3 +46,5 @@ class ReasoningResult(BaseModel):
     actions_log: list[dict[str, str]] = Field(default_factory=list)
     assessment: SelfAssessment | None = None
     enrichment: EnrichmentResult | None = None
+    challenge: ChallengeResult | None = None
+    debate_rounds: int = 0

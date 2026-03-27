@@ -238,8 +238,9 @@ def ingest(ctx: click.Context, paths: tuple[str, ...], reset: bool, dry_run: boo
 @click.option("--resume", "-r", is_flag=True, help="Resume last chat session")
 @click.option("--session", "-s", default=None, help="Resume a named session")
 @click.option("--stream", is_flag=True, help="Stream reasoning steps in real-time")
+@click.option("--debate", is_flag=True, help="Enable multi-agent debate for answer verification")
 @click.pass_context
-def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, session: str | None, stream: bool) -> None:
+def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, session: str | None, stream: bool, debate: bool) -> None:
     """Chat with the knowledge graph using multi-hop reasoning."""
     settings: Settings = ctx.obj["settings"]
 
@@ -373,6 +374,9 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
                 compacted_turns=compacted_turns,
                 context_max_tokens=settings.chat_context_max_tokens,
                 stream=stream,
+                debate=debate,
+                debate_max_rounds=settings.debate_max_rounds,
+                debate_confidence_threshold=settings.debate_confidence_threshold,
             )
         )
         click.echo(f"\nAnswer: {result.answer}")
@@ -458,6 +462,9 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
                     compacted_turns=compacted_turns,
                     context_max_tokens=settings.chat_context_max_tokens,
                     stream=stream,
+                debate=debate,
+                debate_max_rounds=settings.debate_max_rounds,
+                debate_confidence_threshold=settings.debate_confidence_threshold,
                 )
             )
             chat_history.append({
