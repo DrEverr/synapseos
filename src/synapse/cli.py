@@ -813,6 +813,53 @@ def versions(ctx: click.Context, activate: int | None, export_id: int | None) ->
     store.close()
 
 
+@main.command(name="export")
+@click.argument("session")
+@click.option("--format", "fmt", type=click.Choice(["md", "pdf"]), default="md", help="Output format")
+@click.option("--output", "-o", default=None, help="Output file path (default: stdout for md, required for pdf)")
+@click.pass_context
+def export_session(ctx: click.Context, session: str, fmt: str, output: str | None) -> None:
+    """Export a chat session to Markdown or PDF.
+
+    SESSION can be a session name, full ID, or ID prefix.
+
+    Examples:
+
+      synapse -g cooking export "pizza session" --format md
+
+      synapse -g cooking export e77bdaab -o session.md
+
+      synapse -g cooking export "pizza session" --format pdf -o report.pdf
+    """
+    settings: Settings = ctx.obj["settings"]
+    store = settings.get_instance_store()
+
+    from synapse.export import export_session_to_markdown, export_session_to_pdf
+
+    try:
+        if fmt == "md":
+            md = export_session_to_markdown(session, store)
+            if output:
+                Path(output).write_text(md, encoding="utf-8")
+                click.echo(f"Exported to {output}")
+            else:
+                click.echo(md)
+        elif fmt == "pdf":
+            if not output:
+                click.echo("Error: --output is required for PDF export.")
+                sys.exit(1)
+            export_session_to_pdf(session, store, output)
+            click.echo(f"Exported to {output}")
+    except ValueError as e:
+        click.echo(f"Error: {e}")
+        sys.exit(1)
+    except ImportError as e:
+        click.echo(f"Error: {e}")
+        sys.exit(1)
+    finally:
+        store.close()
+
+
 # ══════════════════════════════════════════════════════════════
 # Utilities
 # ══════════════════════════════════════════════════════════════
