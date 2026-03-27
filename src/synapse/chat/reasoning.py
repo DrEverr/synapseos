@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 
 from synapse.chat.prompts import (
     COMPACTION_SYSTEM,
@@ -640,6 +640,8 @@ async def reason_full(
     cached_summary: str = "",
     compacted_turns: int = 0,
     context_max_tokens: int = _DEFAULT_CONTEXT_MAX_TOKENS,
+    on_step: Callable[[int, str, str], None] | None = None,
+    stream: bool = False,
 ) -> ReasoningResult:
     """Execute a ReAct reasoning loop with enrichment, self-assessment, and episode logging.
 
@@ -705,12 +707,27 @@ async def reason_full(
         if verbose:
             print(f"\n--- Step {step + 1} ({elapsed:.1f}s) ---")
 
-        response = await llm.complete_messages(
-            messages=messages, temperature=0.0, max_tokens=step_max_tokens
-        )
+        if stream:
+            # Stream tokens and accumulate full response
+            response = ""
+            async for token in llm.complete_messages_stream(
+                messages=messages, temperature=0.0, max_tokens=step_max_tokens
+            ):
+                response += token
+                if verbose:
+                    print(token, end="", flush=True)
+            if verbose:
+                print()  # newline after streaming
+        else:
+            response = await llm.complete_messages(
+                messages=messages, temperature=0.0, max_tokens=step_max_tokens
+            )
+            if verbose:
+                print(response)
 
-        if verbose:
-            print(response)
+        # Notify caller about this step
+        if on_step:
+            on_step(step + 1, "thinking", response)
 
         if len(response) > 600 and "Action:" not in response:
             truncated_for_history = "..." + response[-300:]
@@ -745,6 +762,8 @@ async def reason_full(
             answer = args
             steps_completed = step + 1
             actions_log.append({"tool": "ANSWER", "args": "", "observation": args})
+            if on_step:
+                on_step(step + 1, "answer", args)
             break
 
         multi_warning = ""

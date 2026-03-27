@@ -237,8 +237,9 @@ def ingest(ctx: click.Context, paths: tuple[str, ...], reset: bool, dry_run: boo
 @click.option("--verbose", "-v", is_flag=True, help="Show reasoning trace")
 @click.option("--resume", "-r", is_flag=True, help="Resume last chat session")
 @click.option("--session", "-s", default=None, help="Resume a named session")
+@click.option("--stream", is_flag=True, help="Stream reasoning steps in real-time")
 @click.pass_context
-def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, session: str | None) -> None:
+def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, session: str | None, stream: bool) -> None:
     """Chat with the knowledge graph using multi-hop reasoning."""
     settings: Settings = ctx.obj["settings"]
 
@@ -371,6 +372,7 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
                 cached_summary=cached_summary,
                 compacted_turns=compacted_turns,
                 context_max_tokens=settings.chat_context_max_tokens,
+                stream=stream,
             )
         )
         click.echo(f"\nAnswer: {result.answer}")
@@ -455,6 +457,7 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
                     cached_summary=cached_summary,
                     compacted_turns=compacted_turns,
                     context_max_tokens=settings.chat_context_max_tokens,
+                    stream=stream,
                 )
             )
             chat_history.append({
