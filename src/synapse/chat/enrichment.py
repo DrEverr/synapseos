@@ -90,8 +90,8 @@ async def enrich_graph_from_answer(
     if not isinstance(data, dict):
         return 0, 0
 
-    raw_entities = data.get("entities", [])
-    raw_relationships = data.get("relationships", [])
+    raw_entities = data.get("entities") or data.get("new_entities") or []
+    raw_relationships = data.get("relationships") or data.get("new_relationships") or []
     if not raw_entities and not raw_relationships:
         return 0, 0
 

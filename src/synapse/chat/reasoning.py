@@ -88,8 +88,9 @@ def _suggest_entity_alternatives(cypher: str, graph: GraphStore) -> str:
                 result = graph.query(
                     "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
                     "AND COALESCE(n.verified, true) = true "
-                    f"AND toLower(n.canonical_name) CONTAINS toLower('{word}') "
-                    "RETURN DISTINCT n.canonical_name, labels(n)[0] LIMIT 8"
+                    "AND toLower(n.canonical_name) CONTAINS toLower($word) "
+                    "RETURN DISTINCT n.canonical_name, labels(n)[0] LIMIT 8",
+                    params={"word": word},
                 )
                 for row in result:
                     entry = f"{row[0]} ({row[1]})"

@@ -238,21 +238,21 @@ class GraphStore:
         ]
 
     def search_entities(self, query: str, limit: int = 20) -> list:
-        result = self.query(
+        return self.query(
             "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
-            f"AND toLower(n.canonical_name) CONTAINS toLower('{query}') "
-            f"RETURN n.canonical_name, labels(n)[0], n.text LIMIT {limit}"
+            "AND toLower(n.canonical_name) CONTAINS toLower($query) "
+            f"RETURN n.canonical_name, labels(n)[0], n.text LIMIT {limit}",
+            params={"query": query},
         )
-        return result
 
     def get_neighbors(self, canonical_name: str, max_hops: int = 2) -> list:
-        result = self.query(
+        return self.query(
             f"MATCH p = (a)-[*1..{max_hops}]-(b) "
-            f"WHERE toLower(a.canonical_name) CONTAINS toLower('{canonical_name}') "
+            "WHERE toLower(a.canonical_name) CONTAINS toLower($name) "
             "RETURN [n in nodes(p) | n.canonical_name] AS path, "
-            "[r in relationships(p) | type(r)] AS rels LIMIT 30"
+            "[r in relationships(p) | type(r)] AS rels LIMIT 30",
+            params={"name": canonical_name},
         )
-        return result
 
     def _section_to_dict(self, section: Any) -> dict:
         """Recursively convert a Section to a serializable dict."""
@@ -315,6 +315,19 @@ class GraphStore:
             f"MATCH (a {{canonical_name: $subj}})-[r:{predicate}]->(b {{canonical_name: $obj}}) "
             "WHERE COALESCE(r.verified, true) = false DELETE r",
             params={"subj": subj, "obj": obj},
+        )
+
+    def verify_all_entities(self) -> None:
+        """Mark all unverified entities as verified in a single query."""
+        self._graph.query(
+            "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
+            "AND COALESCE(n.verified, true) = false SET n.verified = true"
+        )
+
+    def verify_all_relationships(self) -> None:
+        """Mark all unverified relationships as verified in a single query."""
+        self._graph.query(
+            "MATCH ()-[r]->() WHERE COALESCE(r.verified, true) = false SET r.verified = true"
         )
 
     def migrate_verified_flag(self) -> None:
