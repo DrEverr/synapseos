@@ -829,7 +829,7 @@ async def reason_full(
             actions_log.append({"tool": "GRAPH_QUERY", "args": args, "observation": result_full})
 
             if stream or verbose:
-                print(f"  → {result_text[:300]}")
+                print(f"  → {result_text}")
             messages.append(
                 {"role": "user", "content": f"Query result:\n{result_text}{multi_warning}"}
             )
@@ -838,7 +838,7 @@ async def reason_full(
             text = get_section_text(args, graph, text_cache)
             actions_log.append({"tool": "SECTION_TEXT", "args": args, "observation": text})
             if stream or verbose:
-                print(f"  → Section: {text[:300]}")
+                print(f"  → Section: {text}")
             messages.append({"role": "user", "content": f"Section text:\n{text}{multi_warning}"})
 
         steps_completed = step + 1
