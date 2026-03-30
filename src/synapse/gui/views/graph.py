@@ -68,10 +68,14 @@ class GraphInspectorView(QWidget):
 
         self._tabs = QTabWidget()
         self._tabs.addTab(self._build_overview_tab(), "Overview")
+        self._tabs.addTab(self._build_health_tab(), "Health")
         self._tabs.addTab(self._build_triples_tab(), "Triples")
         self._tabs.addTab(self._build_trees_tab(), "Document Trees")
         self._tabs.addTab(self._build_cypher_tab(), "Cypher")
         self._tabs.addTab(self._build_duplicates_tab(), "Duplicates")
+        self._tabs.addTab(self._build_conflicts_tab(), "Conflicts")
+        self._tabs.addTab(self._build_decayed_tab(), "Decayed")
+        self._tabs.addTab(self._build_provenance_tab(), "Provenance")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
@@ -173,6 +177,107 @@ class GraphInspectorView(QWidget):
         layout.addWidget(self._cypher_input)
         layout.addWidget(exec_btn)
         layout.addWidget(self._cypher_result, stretch=1)
+        return tab
+
+    def _build_health_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        load_btn = QPushButton("Run Health Check")
+        load_btn.clicked.connect(self._load_health)
+
+        # Stat cards row
+        self._health_cards_layout = QGridLayout()
+        self._health_labels: dict[str, QLabel] = {}
+        metrics = [
+            ("Entities", "entity_count"),
+            ("Orphan Nodes", "orphan_nodes"),
+            ("Low-Conf Entities", "low_confidence_entities"),
+            ("Low-Conf Rels", "low_confidence_relationships"),
+            ("Unverified", "unverified_count"),
+            ("Avg Confidence", "avg_confidence"),
+            ("Rel Density", "relationship_density"),
+            ("Doc Coverage", "document_coverage_pct"),
+        ]
+        for i, (title, key) in enumerate(metrics):
+            card = _StatCard(title, "—")
+            self._health_labels[key] = card._value
+            self._health_cards_layout.addWidget(card, i // 4, i % 4)
+
+        self._health_unused_label = QLabel("")
+        self._health_unused_label.setWordWrap(True)
+        self._health_unused_label.setStyleSheet("color: #8e8ea0; padding: 8px;")
+
+        layout.addWidget(load_btn)
+        layout.addLayout(self._health_cards_layout)
+        layout.addWidget(self._health_unused_label)
+        layout.addStretch()
+        return tab
+
+    def _build_conflicts_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        load_btn = QPushButton("Detect Conflicts")
+        load_btn.clicked.connect(self._load_conflicts)
+
+        self._conflicts_table = QTableWidget(0, 6)
+        self._conflicts_table.setHorizontalHeaderLabels([
+            "Subject", "Relation 1", "Relation 2", "Object", "Conf 1", "Conf 2"
+        ])
+        self._conflicts_table.horizontalHeader().setStretchLastSection(True)
+        self._conflicts_table.setSortingEnabled(True)
+
+        self._conflicts_count = QLabel("")
+
+        layout.addWidget(load_btn)
+        layout.addWidget(self._conflicts_count)
+        layout.addWidget(self._conflicts_table, stretch=1)
+        return tab
+
+    def _build_decayed_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        load_btn = QPushButton("Find Decayed Entities")
+        load_btn.clicked.connect(self._load_decayed)
+
+        self._decayed_table = QTableWidget(0, 5)
+        self._decayed_table.setHorizontalHeaderLabels([
+            "Entity", "Type", "Base Conf", "Effective Conf", "Last Confirmed"
+        ])
+        self._decayed_table.horizontalHeader().setStretchLastSection(True)
+        self._decayed_table.setSortingEnabled(True)
+
+        self._decayed_count = QLabel("")
+
+        layout.addWidget(load_btn)
+        layout.addWidget(self._decayed_count)
+        layout.addWidget(self._decayed_table, stretch=1)
+        return tab
+
+    def _build_provenance_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        toolbar = QHBoxLayout()
+        self._provenance_input = QLineEdit()
+        self._provenance_input.setPlaceholderText("Entity name to look up...")
+        self._provenance_input.returnPressed.connect(self._load_provenance)
+        search_btn = QPushButton("Search")
+        search_btn.clicked.connect(self._load_provenance)
+        toolbar.addWidget(self._provenance_input, stretch=1)
+        toolbar.addWidget(search_btn)
+
+        self._provenance_table = QTableWidget(0, 5)
+        self._provenance_table.setHorizontalHeaderLabels([
+            "Entity", "Type", "Source Text", "Section", "Document"
+        ])
+        self._provenance_table.horizontalHeader().setStretchLastSection(True)
+        self._provenance_table.setWordWrap(True)
+
+        layout.addLayout(toolbar)
+        layout.addWidget(self._provenance_table, stretch=1)
         return tab
 
     def _build_duplicates_tab(self) -> QWidget:
@@ -426,3 +531,144 @@ class GraphInspectorView(QWidget):
             item = QTableWidgetItem()
             item.setData(Qt.ItemDataRole.DisplayRole, int(count or 0))
             self._dup_table.setItem(i, 2, item)
+
+    @Slot()
+    def _load_health(self) -> None:
+        try:
+            graph = self._bridge.get_graph()
+            store = self._bridge.get_store()
+            from synapse.config import OntologyRegistry
+            ontology = OntologyRegistry(store=store, ontology_name=self._bridge.settings.ontology)
+            report = graph.get_graph_health(ontology_types=ontology.entity_types)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Health check failed: {e}")
+            return
+
+        self._health_labels["entity_count"].setText(str(report["entity_count"]))
+        self._health_labels["orphan_nodes"].setText(str(report["orphan_nodes"]))
+        self._health_labels["low_confidence_entities"].setText(str(report["low_confidence_entities"]))
+        self._health_labels["low_confidence_relationships"].setText(str(report["low_confidence_relationships"]))
+        self._health_labels["unverified_count"].setText(str(report["unverified_count"]))
+        self._health_labels["avg_confidence"].setText(f"{report['avg_confidence']:.3f}")
+        self._health_labels["relationship_density"].setText(f"{report['relationship_density']:.2f}")
+        self._health_labels["document_coverage_pct"].setText(
+            f"{report['document_coverage_pct']}%"
+        )
+        if report["unused_ontology_types"]:
+            self._health_unused_label.setText(
+                f"Unused ontology types: {', '.join(report['unused_ontology_types'])}"
+            )
+        else:
+            self._health_unused_label.setText("All ontology types are in use.")
+
+    @Slot()
+    def _load_conflicts(self) -> None:
+        try:
+            graph = self._bridge.get_graph()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Cannot connect: {e}")
+            return
+
+        from pathlib import Path
+        import json as _json
+        rules_path = Path(__file__).resolve().parent.parent.parent.parent / "config" / "conflict_rules.json"
+        rules: list[list[str]] = []
+        if rules_path.exists():
+            try:
+                rules_data = _json.loads(rules_path.read_text())
+                rules = rules_data.get("contradictory_pairs", [])
+            except (_json.JSONDecodeError, ValueError) as e:
+                logger.warning("Failed to parse %s: %s — using defaults", rules_path, e)
+                rules = []
+        if not rules:
+            rules = [
+                ["CAUSES", "PROTECTS_AGAINST"],
+                ["COMPATIBLE_WITH", "INCOMPATIBLE_WITH"],
+                ["SUITABLE_FOR", "INEFFECTIVE_AGAINST"],
+                ["VULNERABLE_TO", "PROTECTS_AGAINST"],
+            ]
+
+        conflicts = graph.find_conflicts(rules)
+        self._conflicts_count.setText(
+            f"Found {len(conflicts)} conflict(s)." if conflicts else "No conflicts found."
+        )
+        self._conflicts_table.setRowCount(len(conflicts))
+        for i, c in enumerate(conflicts):
+            self._conflicts_table.setItem(i, 0, QTableWidgetItem(str(c["subject"] or "")))
+            self._conflicts_table.setItem(i, 1, QTableWidgetItem(str(c["rel1"] or "")))
+            self._conflicts_table.setItem(i, 2, QTableWidgetItem(str(c["rel2"] or "")))
+            self._conflicts_table.setItem(i, 3, QTableWidgetItem(str(c["object"] or "")))
+            conf1 = QTableWidgetItem()
+            conf1.setData(Qt.ItemDataRole.DisplayRole, float(c.get("confidence1") or 0))
+            self._conflicts_table.setItem(i, 4, conf1)
+            conf2 = QTableWidgetItem()
+            conf2.setData(Qt.ItemDataRole.DisplayRole, float(c.get("confidence2") or 0))
+            self._conflicts_table.setItem(i, 5, conf2)
+        self._conflicts_table.resizeColumnsToContents()
+
+    @Slot()
+    def _load_decayed(self) -> None:
+        try:
+            graph = self._bridge.get_graph()
+            settings = self._bridge.settings
+            rows = graph.get_decayed_entities(
+                decay_rate=settings.confidence_decay_rate, threshold=0.5
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to load decayed entities: {e}")
+            return
+
+        self._decayed_count.setText(
+            f"Found {len(rows)} decayed entit{'y' if len(rows) == 1 else 'ies'}."
+            if rows else "No decayed entities found."
+        )
+        self._decayed_table.setRowCount(len(rows))
+        for i, row in enumerate(rows):
+            self._decayed_table.setItem(i, 0, QTableWidgetItem(str(row[0] or "")))
+            self._decayed_table.setItem(i, 1, QTableWidgetItem(str(row[1] or "")))
+            base = QTableWidgetItem()
+            base.setData(Qt.ItemDataRole.DisplayRole, float(row[2] or 0))
+            self._decayed_table.setItem(i, 2, base)
+            eff = QTableWidgetItem()
+            eff.setData(Qt.ItemDataRole.DisplayRole, float(row[4] or 0))
+            self._decayed_table.setItem(i, 3, eff)
+            self._decayed_table.setItem(i, 4, QTableWidgetItem(str(row[3] or "")))
+        self._decayed_table.resizeColumnsToContents()
+
+    @Slot()
+    def _load_provenance(self) -> None:
+        query = self._provenance_input.text().strip()
+        if not query:
+            return
+        try:
+            graph = self._bridge.get_graph()
+            results = graph.get_entity_provenance(query)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Provenance lookup failed: {e}")
+            return
+
+        # If no source_text, try text cache fallback
+        cache = None
+        try:
+            from synapse.storage.text_cache import TextCache
+            cache = TextCache(cache_dir=self._bridge.settings.get_text_cache_dir())
+        except Exception as e:
+            logger.debug("Could not initialize TextCache for provenance fallback: %s", e)
+
+        self._provenance_table.setRowCount(len(results))
+        for i, r in enumerate(results):
+            self._provenance_table.setItem(i, 0, QTableWidgetItem(r["entity"] or ""))
+            self._provenance_table.setItem(i, 1, QTableWidgetItem(r["entity_type"] or ""))
+            source = r["source_text"]
+            if not source and r.get("section_id") and cache is not None:
+                try:
+                    ctx = cache.get_context(r["section_id"], query)
+                    source = ctx[:300] if ctx else ""
+                except Exception as e:
+                    logger.debug("TextCache fallback failed for %s: %s", r["section_id"], e)
+            self._provenance_table.setItem(i, 2, QTableWidgetItem(source))
+            self._provenance_table.setItem(i, 3, QTableWidgetItem(r["section_title"] or ""))
+            self._provenance_table.setItem(i, 4, QTableWidgetItem(
+                f"{r['doc_title']} ({r['doc_filename']})" if r.get("doc_title") else ""
+            ))
+        self._provenance_table.resizeColumnsToContents()

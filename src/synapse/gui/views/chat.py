@@ -202,9 +202,23 @@ class ChatView(QWidget):
         self._session_list = QListWidget()
         self._session_list.itemDoubleClicked.connect(self._on_session_double_click)
 
+        # Export buttons
+        export_row = QHBoxLayout()
+        self._export_md_btn = QPushButton("Export MD")
+        self._export_md_btn.setProperty("secondary", True)
+        self._export_md_btn.setToolTip("Export selected session to Markdown")
+        self._export_md_btn.clicked.connect(lambda: self._export_session("md"))
+        self._export_pdf_btn = QPushButton("Export PDF")
+        self._export_pdf_btn.setProperty("secondary", True)
+        self._export_pdf_btn.setToolTip("Export selected session to PDF")
+        self._export_pdf_btn.clicked.connect(lambda: self._export_session("pdf"))
+        export_row.addWidget(self._export_md_btn)
+        export_row.addWidget(self._export_pdf_btn)
+
         layout.addWidget(header)
         layout.addWidget(self.new_session_btn)
         layout.addWidget(self._session_list, stretch=1)
+        layout.addLayout(export_row)
         return panel
 
     def _build_chat_panel(self) -> QWidget:
@@ -256,9 +270,13 @@ class ChatView(QWidget):
         self._verbose_check = QCheckBox("Verbose")
         self._verbose_check.setToolTip("Show detailed reasoning trace")
 
+        self._debate_check = QCheckBox("Debate")
+        self._debate_check.setToolTip("Multi-agent answer verification (challenger reviews answers)")
+
         input_row = QHBoxLayout()
         input_row.addWidget(self._input, stretch=1)
         input_row.addWidget(self._verbose_check)
+        input_row.addWidget(self._debate_check)
         input_row.addWidget(self._send_btn)
 
         layout.addWidget(self._chat_header)
@@ -406,6 +424,7 @@ class ChatView(QWidget):
         self._trace_tree.clear()
 
         verbose = self._verbose_check.isChecked()
+        debate = self._debate_check.isChecked()
         chat_history = list(self._chat_history)
         session_id = self._session_id
         cached_summary = self._cached_summary
@@ -442,6 +461,17 @@ class ChatView(QWidget):
             text_cache = TextCache(cache_dir=instance_dir / "text_cache")
             ontology = OntologyRegistry(store=store, ontology_name=settings.ontology)
 
+            # Challenger LLM for debate mode
+            challenger_llm = None
+            if debate:
+                challenger_model = settings.challenger_model or settings.chat_model or settings.llm_model
+                challenger_llm = LLMClient(
+                    api_key=settings.llm_api_key,
+                    base_url=settings.llm_base_url,
+                    model=challenger_model,
+                    timeout=settings.llm_timeout,
+                )
+
             try:
                 return await reason_full(
                     question=question,
@@ -460,6 +490,10 @@ class ChatView(QWidget):
                     cached_summary=cached_summary,
                     compacted_turns=compacted_turns,
                     context_max_tokens=settings.chat_context_max_tokens,
+                    debate=debate,
+                    debate_max_rounds=settings.debate_max_rounds,
+                    debate_confidence_threshold=settings.debate_confidence_threshold,
+                    challenger_llm=challenger_llm,
                 )
             finally:
                 store.close()
@@ -513,6 +547,10 @@ class ChatView(QWidget):
         if result.assessment:
             metadata["confidence"] = result.assessment.confidence
             metadata["groundedness"] = result.assessment.groundedness
+        if result.debate_rounds:
+            metadata["debate_rounds"] = result.debate_rounds
+        if result.challenge:
+            metadata["challenge"] = result.challenge.verdict
 
         self._add_bubble(result.answer, is_user=False, metadata=metadata)
 
@@ -581,6 +619,51 @@ class ChatView(QWidget):
         worker.signals.finished.connect(on_name)
         worker.signals.error.connect(lambda _, w=worker: self._active_workers.discard(w))
         worker.start()
+
+    # -- Export session --------------------------------------------------------
+
+    def _export_session(self, fmt: str) -> None:
+        """Export the selected (or current) session to Markdown or PDF."""
+        from PySide6.QtWidgets import QFileDialog
+
+        # Determine which session to export
+        selected = self._session_list.currentItem()
+        if selected:
+            session_data = selected.data(Qt.ItemDataRole.UserRole)
+            session_id = session_data["session_id"] if session_data else self._session_id
+        else:
+            session_id = self._session_id
+
+        if not session_id:
+            QMessageBox.warning(self, "Export", "No session to export.")
+            return
+
+        try:
+            store = self._bridge.get_store()
+            if fmt == "md":
+                from synapse.export import export_session_to_markdown
+                md = export_session_to_markdown(session_id, store)
+                path, _ = QFileDialog.getSaveFileName(
+                    self, "Export Markdown", f"session_{session_id[:8]}.md",
+                    "Markdown (*.md)"
+                )
+                if path:
+                    from pathlib import Path
+                    Path(path).write_text(md, encoding="utf-8")
+                    QMessageBox.information(self, "Export", f"Saved to {path}")
+            elif fmt == "pdf":
+                from synapse.export import export_session_to_pdf
+                path, _ = QFileDialog.getSaveFileName(
+                    self, "Export PDF", f"session_{session_id[:8]}.pdf",
+                    "PDF (*.pdf)"
+                )
+                if path:
+                    export_session_to_pdf(session_id, store, path)
+                    QMessageBox.information(self, "Export", f"Saved to {path}")
+        except ImportError as e:
+            QMessageBox.warning(self, "Export", str(e))
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", str(e))
 
     # -- Reasoning trace -------------------------------------------------------
 

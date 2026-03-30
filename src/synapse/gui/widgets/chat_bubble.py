@@ -293,6 +293,10 @@ class ChatBubble(QWidget):
                 parts.append(f"Confidence {metadata['confidence']:.0%}")
             if "groundedness" in metadata:
                 parts.append(f"Grounded {metadata['groundedness']:.0%}")
+            if "debate_rounds" in metadata:
+                parts.append(f"Debate: {metadata['debate_rounds']} rounds")
+            if "challenge" in metadata:
+                parts.append(f"Verdict: {metadata['challenge']}")
             if "steps" in metadata:
                 parts.append(f"{metadata['steps']} steps")
             if "elapsed" in metadata:
