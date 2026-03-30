@@ -175,14 +175,32 @@ def export_session_to_pdf(
         bottomMargin=2 * cm,
     )
 
+    # Register Unicode-capable TTF font
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    _register_unicode_font(pdfmetrics, TTFont)
+
     styles = getSampleStyleSheet()
+
+    # Override all styles to use Unicode font
+    unicode_font = "DejaVuSans"
+    unicode_font_bold = "DejaVuSans-Bold"
+    unicode_font_mono = "DejaVuSansMono"
+    for style in styles.byName.values():
+        if hasattr(style, "fontName"):
+            if "Bold" in style.fontName or "Heading" in style.name or "Title" in style.name:
+                style.fontName = unicode_font_bold
+            else:
+                style.fontName = unicode_font
+
     title_style = styles["Title"]
     heading_style = styles["Heading2"]
     normal_style = styles["Normal"]
     code_style = ParagraphStyle(
         "Code",
         parent=normal_style,
-        fontName="Courier",
+        fontName=unicode_font_mono,
         fontSize=8,
         leading=10,
         leftIndent=12,
@@ -273,6 +291,54 @@ def _resolve_session(session_ref: str, store: InstanceStore) -> dict[str, Any]:
     if not session:
         raise ValueError(f"Session not found: {session_ref}")
     return session
+
+
+_UNICODE_FONTS_REGISTERED = False
+
+
+def _register_unicode_font(pdfmetrics, TTFont) -> None:
+    """Register a Unicode-capable TTF font for PDF export (supports all languages)."""
+    global _UNICODE_FONTS_REGISTERED
+    if _UNICODE_FONTS_REGISTERED:
+        return
+
+    import os
+
+    # Search for Unicode TTF fonts on the system (ordered by preference)
+    candidates = [
+        # macOS
+        "/Library/Fonts/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Tahoma.ttf",
+        # Linux — DejaVu
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        # Homebrew
+        "/opt/homebrew/share/fonts/dejavu/DejaVuSans.ttf",
+        # Windows
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/tahoma.ttf",
+    ]
+
+    found = None
+    for path in candidates:
+        if os.path.exists(path):
+            found = path
+            break
+
+    if found:
+        pdfmetrics.registerFont(TTFont("DejaVuSans", found))
+        pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", found))
+        pdfmetrics.registerFont(TTFont("DejaVuSansMono", found))
+        _UNICODE_FONTS_REGISTERED = True
+        return
+
+    # No suitable font found — ReportLab will use Helvetica (ASCII only)
+    import logging
+    logging.getLogger(__name__).warning(
+        "No Unicode TTF font found. PDF may not display non-ASCII characters correctly."
+    )
 
 
 def _pdf_escape(text: str) -> str:
