@@ -262,6 +262,14 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
         model=chat_model,
         timeout=settings.llm_timeout,
     )
+    challenger_llm = None
+    if debate and settings.challenger_model:
+        challenger_llm = LLMClient(
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
+            model=settings.challenger_model,
+            timeout=settings.llm_timeout,
+        )
     graph = GraphStore(
         host=settings.falkordb_host,
         port=settings.falkordb_port,
@@ -377,6 +385,7 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
                 debate=debate,
                 debate_max_rounds=settings.debate_max_rounds,
                 debate_confidence_threshold=settings.debate_confidence_threshold,
+                challenger_llm=challenger_llm,
             )
         )
         click.echo(f"\nAnswer: {result.answer}")
@@ -465,6 +474,7 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
                 debate=debate,
                 debate_max_rounds=settings.debate_max_rounds,
                 debate_confidence_threshold=settings.debate_confidence_threshold,
+                challenger_llm=challenger_llm,
                 )
             )
             chat_history.append({

@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     bootstrap_model: str = ""
     extraction_model: str = ""
     chat_model: str = ""
+    challenger_model: str = ""
     compaction_model: str = "google/gemini-2.0-flash-001"
 
     # FalkorDB

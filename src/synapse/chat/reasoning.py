@@ -680,6 +680,7 @@ async def reason_full(
     debate: bool = False,
     debate_max_rounds: int = 2,
     debate_confidence_threshold: float = 0.7,
+    challenger_llm: LLMClient | None = None,
 ) -> ReasoningResult:
     """Execute a ReAct reasoning loop with enrichment, self-assessment, and episode logging.
 
@@ -913,7 +914,7 @@ async def reason_full(
                 answer=answer,
                 question=question,
                 evidence_summary=evidence_summary,
-                llm=llm,
+                llm=challenger_llm or llm,
                 store=store,
             )
             debate_rounds += 1
