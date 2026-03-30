@@ -742,20 +742,18 @@ async def reason_full(
             timed_out = True
             break
 
-        if verbose:
+        if stream or verbose:
             print(f"\n--- Step {step + 1} ({elapsed:.1f}s) ---")
 
         if stream:
-            # Stream tokens and accumulate full response
+            # Stream tokens and accumulate full response — always print
             response = ""
             async for token in llm.complete_messages_stream(
                 messages=messages, temperature=0.0, max_tokens=step_max_tokens
             ):
                 response += token
-                if verbose:
-                    print(token, end="", flush=True)
-            if verbose:
-                print()  # newline after streaming
+                print(token, end="", flush=True)
+            print()  # newline after streaming
         else:
             response = await llm.complete_messages(
                 messages=messages, temperature=0.0, max_tokens=step_max_tokens
@@ -830,8 +828,8 @@ async def reason_full(
 
             actions_log.append({"tool": "GRAPH_QUERY", "args": args, "observation": result_full})
 
-            if verbose:
-                print(f"Result: {result_text[:500]}")
+            if stream or verbose:
+                print(f"  → {result_text[:300]}")
             messages.append(
                 {"role": "user", "content": f"Query result:\n{result_text}{multi_warning}"}
             )
@@ -839,8 +837,8 @@ async def reason_full(
         elif tool == "SECTION_TEXT":
             text = get_section_text(args, graph, text_cache)
             actions_log.append({"tool": "SECTION_TEXT", "args": args, "observation": text})
-            if verbose:
-                print(f"Section: {text[:500]}")
+            if stream or verbose:
+                print(f"  → Section: {text[:300]}")
             messages.append({"role": "user", "content": f"Section text:\n{text}{multi_warning}"})
 
         steps_completed = step + 1
