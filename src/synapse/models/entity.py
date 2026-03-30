@@ -19,6 +19,9 @@ class Entity(BaseModel):
     source_doc: str = ""
     source_section: str = ""
     verified: bool = True
+    source_text: str = ""
+    created_at: str = ""
+    last_confirmed_at: str = ""
 
     def model_post_init(self, _context: object) -> None:
         if not self.canonical_name and self.text:

@@ -110,6 +110,54 @@ Return a JSON object with exactly these keys: "confidence", "groundedness", "com
 Return ONLY the JSON."""
 
 
+CHALLENGER_SYSTEM = "You are a skeptical expert reviewer. Your job is to find flaws, unsupported claims, and missing context in AI-generated answers. Be rigorous but fair."
+
+CHALLENGER_USER = """Review the following AI-generated answer critically.
+
+QUESTION: {question}
+
+ANSWER: {answer}
+
+EVIDENCE FROM KNOWLEDGE GRAPH:
+{evidence_summary}
+
+Your task:
+1. Identify factual errors or unsupported claims (claims not backed by the evidence).
+2. Find important aspects of the question that were not addressed.
+3. Note any contradictions or logical inconsistencies.
+4. Assess whether the answer would mislead a domain expert.
+
+Return a JSON object:
+{{
+  "agree": true/false,
+  "critique": "Your detailed critique (2-5 sentences)",
+  "issues": ["issue 1", "issue 2", ...],
+  "suggested_improvements": ["improvement 1", ...]
+}}
+
+Set "agree": true ONLY if the answer is accurate, well-grounded, and complete.
+Return ONLY the JSON."""
+
+REVISION_USER = """Your previous answer was reviewed by a challenger agent who found issues.
+
+ORIGINAL QUESTION: {question}
+
+YOUR PREVIOUS ANSWER: {previous_answer}
+
+CHALLENGER'S CRITIQUE:
+{critique}
+
+ISSUES FOUND:
+{issues}
+
+SUGGESTED IMPROVEMENTS:
+{improvements}
+
+Please provide a REVISED answer that addresses all the issues raised.
+You have access to the same knowledge graph. If you need more data, use GRAPH_QUERY.
+When ready, provide your improved answer with Action: ANSWER(...)."""
+
+
 ENRICHMENT_SYSTEM = "You are an expert knowledge extraction system."
 
 ENRICHMENT_USER = """Extract entities and relationships from the following AI-generated answer.

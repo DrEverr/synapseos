@@ -237,8 +237,10 @@ def ingest(ctx: click.Context, paths: tuple[str, ...], reset: bool, dry_run: boo
 @click.option("--verbose", "-v", is_flag=True, help="Show reasoning trace")
 @click.option("--resume", "-r", is_flag=True, help="Resume last chat session")
 @click.option("--session", "-s", default=None, help="Resume a named session")
+@click.option("--stream", is_flag=True, help="Stream reasoning steps in real-time")
+@click.option("--debate", is_flag=True, help="Enable multi-agent debate for answer verification")
 @click.pass_context
-def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, session: str | None) -> None:
+def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, session: str | None, stream: bool, debate: bool) -> None:
     """Chat with the knowledge graph using multi-hop reasoning."""
     settings: Settings = ctx.obj["settings"]
 
@@ -260,6 +262,14 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
         model=chat_model,
         timeout=settings.llm_timeout,
     )
+    challenger_llm = None
+    if debate and settings.challenger_model:
+        challenger_llm = LLMClient(
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
+            model=settings.challenger_model,
+            timeout=settings.llm_timeout,
+        )
     graph = GraphStore(
         host=settings.falkordb_host,
         port=settings.falkordb_port,
@@ -371,6 +381,11 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
                 cached_summary=cached_summary,
                 compacted_turns=compacted_turns,
                 context_max_tokens=settings.chat_context_max_tokens,
+                stream=stream,
+                debate=debate,
+                debate_max_rounds=settings.debate_max_rounds,
+                debate_confidence_threshold=settings.debate_confidence_threshold,
+                challenger_llm=challenger_llm,
             )
         )
         click.echo(f"\nAnswer: {result.answer}")
@@ -455,6 +470,11 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
                     cached_summary=cached_summary,
                     compacted_turns=compacted_turns,
                     context_max_tokens=settings.chat_context_max_tokens,
+                    stream=stream,
+                debate=debate,
+                debate_max_rounds=settings.debate_max_rounds,
+                debate_confidence_threshold=settings.debate_confidence_threshold,
+                challenger_llm=challenger_llm,
                 )
             )
             chat_history.append({
@@ -502,10 +522,24 @@ def chat(ctx: click.Context, query: str | None, verbose: bool, resume: bool, ses
 @click.option("--tree", is_flag=True, help="Show document trees")
 @click.option("--cypher", default=None, help="Execute Cypher query")
 @click.option("--unverified", is_flag=True, help="Show unverified (AI-generated) entities and relationships")
+@click.option("--health", is_flag=True, help="Show graph health metrics")
+@click.option("--conflicts", is_flag=True, help="Detect conflicting relationships")
+@click.option("--decayed", is_flag=True, help="Show entities with decayed confidence")
+@click.option("--provenance", default=None, help="Show source provenance for an entity")
 @click.option("--limit", default=100, help="Limit results")
 @click.pass_context
 def inspect(
-    ctx: click.Context, duplicates: bool, triples: bool, tree: bool, cypher: str | None, unverified: bool, limit: int
+    ctx: click.Context,
+    duplicates: bool,
+    triples: bool,
+    tree: bool,
+    cypher: str | None,
+    unverified: bool,
+    health: bool,
+    conflicts: bool,
+    decayed: bool,
+    provenance: str | None,
+    limit: int,
 ) -> None:
     """Inspect the knowledge graph."""
     settings: Settings = ctx.obj["settings"]
@@ -517,6 +551,95 @@ def inspect(
         password=settings.falkordb_password,
         graph_name=settings.graph_name,
     )
+
+    if health:
+        store = settings.get_instance_store()
+        ontology = OntologyRegistry(store=store, ontology_name=settings.ontology)
+        report = graph.get_graph_health(ontology_types=ontology.entity_types)
+        click.echo("Graph Health Report")
+        click.echo("=" * 40)
+        click.echo(f"  Nodes:                    {report['nodes']}")
+        click.echo(f"  Edges:                    {report['edges']}")
+        click.echo(f"  Entities:                 {report['entity_count']}")
+        click.echo(f"  Orphan nodes:             {report['orphan_nodes']}")
+        click.echo(f"  Low-confidence entities:  {report['low_confidence_entities']}")
+        click.echo(f"  Low-confidence rels:      {report['low_confidence_relationships']}")
+        click.echo(f"  Unverified:               {report['unverified_count']}")
+        click.echo(f"  Avg confidence:           {report['avg_confidence']}")
+        click.echo(f"  Relationship density:     {report['relationship_density']}")
+        click.echo(f"  Document coverage:        {report['document_coverage_pct']}% "
+                   f"({report['covered_sections']}/{report['total_sections']} sections)")
+        if report["unused_ontology_types"]:
+            click.echo(f"  Unused ontology types:    {', '.join(report['unused_ontology_types'])}")
+        else:
+            click.echo("  Unused ontology types:    (none)")
+        return
+
+    if conflicts:
+        rules_path = Path(__file__).resolve().parent.parent.parent / "config" / "conflict_rules.json"
+        rules: list[list[str]] = []
+        if rules_path.exists():
+            rules_data = json.loads(rules_path.read_text())
+            rules = rules_data.get("contradictory_pairs", [])
+        else:
+            # Hardcoded defaults
+            rules = [
+                ["CAUSES", "PROTECTS_AGAINST"],
+                ["COMPATIBLE_WITH", "INCOMPATIBLE_WITH"],
+                ["SUITABLE_FOR", "INEFFECTIVE_AGAINST"],
+                ["VULNERABLE_TO", "PROTECTS_AGAINST"],
+            ]
+        found = graph.find_conflicts(rules)
+        if found:
+            click.echo(f"Conflicting relationships ({len(found)}):")
+            for c in found:
+                click.echo(
+                    f"  {c['subject']} -[{c['rel1']}]-> {c['object']}  (conf: {c['confidence1']})\n"
+                    f"  {c['subject']} -[{c['rel2']}]-> {c['object']}  (conf: {c['confidence2']})"
+                )
+                click.echo()
+        else:
+            click.echo("No conflicting relationships found.")
+        return
+
+    if decayed:
+        found = graph.get_decayed_entities(
+            decay_rate=settings.confidence_decay_rate, threshold=0.5
+        )
+        if found:
+            click.echo(f"Decayed entities ({len(found)}):")
+            click.echo(f"  {'Entity':<35} {'Type':<15} {'Base':>6} {'Effective':>10} {'Last confirmed'}")
+            click.echo("  " + "-" * 85)
+            for row in found[:limit]:
+                click.echo(
+                    f"  {str(row[0]):<35} {str(row[1]):<15} {row[2]:>6.2f} {row[4]:>10.2f} {row[3]}"
+                )
+        else:
+            click.echo("No decayed entities found.")
+        return
+
+    if provenance:
+        results = graph.get_entity_provenance(provenance)
+        if results:
+            click.echo(f"Provenance for '{provenance}':")
+            for r in results:
+                click.echo(f"\n  Entity:   [{r['entity_type']}] {r['entity']}")
+                click.echo(f"  Document: {r['doc_title']} ({r['doc_filename']})")
+                click.echo(f"  Section:  {r['section_title']}")
+                if r["source_text"]:
+                    click.echo(f"  Source:   \"{r['source_text']}\"")
+                else:
+                    # Try to get context from text cache
+                    from synapse.storage.text_cache import TextCache
+                    cache = TextCache(settings.get_text_cache_dir())
+                    ctx_text = cache.get_context(r["section_id"], provenance)
+                    if ctx_text:
+                        click.echo(f"  Context:  {ctx_text[:300]}")
+                    else:
+                        click.echo("  Source:   (no source text available)")
+        else:
+            click.echo(f"No provenance found for '{provenance}'.")
+        return
 
     if unverified:
         entities = graph.get_unverified_entities()
@@ -811,6 +934,53 @@ def versions(ctx: click.Context, activate: int | None, export_id: int | None) ->
             )
 
     store.close()
+
+
+@main.command(name="export")
+@click.argument("session")
+@click.option("--format", "fmt", type=click.Choice(["md", "pdf"]), default="md", help="Output format")
+@click.option("--output", "-o", default=None, help="Output file path (default: stdout for md, required for pdf)")
+@click.pass_context
+def export_session(ctx: click.Context, session: str, fmt: str, output: str | None) -> None:
+    """Export a chat session to Markdown or PDF.
+
+    SESSION can be a session name, full ID, or ID prefix.
+
+    Examples:
+
+      synapse -g cooking export "pizza session" --format md
+
+      synapse -g cooking export e77bdaab -o session.md
+
+      synapse -g cooking export "pizza session" --format pdf -o report.pdf
+    """
+    settings: Settings = ctx.obj["settings"]
+    store = settings.get_instance_store()
+
+    from synapse.export import export_session_to_markdown, export_session_to_pdf
+
+    try:
+        if fmt == "md":
+            md = export_session_to_markdown(session, store)
+            if output:
+                Path(output).write_text(md, encoding="utf-8")
+                click.echo(f"Exported to {output}")
+            else:
+                click.echo(md)
+        elif fmt == "pdf":
+            if not output:
+                click.echo("Error: --output is required for PDF export.")
+                sys.exit(1)
+            export_session_to_pdf(session, store, output)
+            click.echo(f"Exported to {output}")
+    except ValueError as e:
+        click.echo(f"Error: {e}")
+        sys.exit(1)
+    except ImportError as e:
+        click.echo(f"Error: {e}")
+        sys.exit(1)
+    finally:
+        store.close()
 
 
 # ══════════════════════════════════════════════════════════════

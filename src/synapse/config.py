@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     bootstrap_model: str = ""
     extraction_model: str = ""
     chat_model: str = ""
+    challenger_model: str = ""
     compaction_model: str = "google/gemini-2.0-flash-001"
 
     # FalkorDB
@@ -75,11 +76,17 @@ class Settings(BaseSettings):
     reasoning_step_max_tokens: int = 2048
     chat_context_max_tokens: int = 4000
     compaction_threshold_turns: int = 4
+    debate_enabled: bool = False
+    debate_max_rounds: int = 2
+    debate_confidence_threshold: float = 0.7
 
     # Bootstrap
     bootstrap_sample_pages: int = 30
     bootstrap_max_entity_types: int = 35
     bootstrap_max_rel_types: int = 50
+
+    # Confidence decay
+    confidence_decay_rate: float = 0.99
 
     # Logging
     log_level: str = "INFO"

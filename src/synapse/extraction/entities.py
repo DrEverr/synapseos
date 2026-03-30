@@ -78,6 +78,7 @@ Return a JSON array. Each entity must have:
 - "entity_type": One of the types listed above (UPPERCASE)
 - "confidence": Confidence score between 0.0 and 1.0
 - "properties": (optional) Key-value pairs of properties for this entity
+- "source_text": The exact sentence from the document where this entity appears (copy verbatim)
 
 RULES:
 1. Extract ALL entities, including numeric measurements with units
@@ -194,6 +195,7 @@ async def extract_entities(
             properties=item.get("properties", {}),
             source_doc=document_title,
             source_section=section.node_id,
+            source_text=item.get("source_text", ""),
         )
         entities.append(entity)
 

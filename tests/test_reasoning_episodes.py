@@ -286,6 +286,7 @@ class TestSessionManagement:
         store.create_session("sess-l2")
         store.store_reasoning_episode(question="Q", answer="A", session_id="sess-l1")
         store.store_reasoning_episode(question="Q2", answer="A2", session_id="sess-l1")
+        store.store_reasoning_episode(question="Q3", answer="A3", session_id="sess-l2")
 
         sessions = store.list_sessions()
         assert len(sessions) == 2
@@ -293,7 +294,7 @@ class TestSessionManagement:
         assert sessions[0]["session_id"] == "sess-l2"
         assert sessions[1]["session_id"] == "sess-l1"
         assert sessions[1]["episode_count"] == 2
-        assert sessions[0]["episode_count"] == 0
+        assert sessions[0]["episode_count"] == 1
 
     def test_create_session_with_name(self, store):
         store.create_session("sess-named", name="alpha-research")

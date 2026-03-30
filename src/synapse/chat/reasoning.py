@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 
 from synapse.chat.prompts import (
     COMPACTION_SYSTEM,
@@ -35,7 +35,7 @@ from synapse.chat.retrieval import get_section_summaries, get_section_text, tree
 from synapse.config import OntologyRegistry
 from synapse.llm.client import LLMClient
 from synapse.llm.templates import safe_format
-from synapse.models.reasoning import EnrichmentResult, ReasoningResult, SelfAssessment
+from synapse.models.reasoning import ChallengeResult, EnrichmentResult, ReasoningResult, SelfAssessment
 from synapse.storage.graph import GraphStore
 from synapse.storage.instance_store import InstanceStore
 from synapse.storage.text_cache import TextCache
@@ -515,6 +515,41 @@ async def _assess_answer(
     )
 
 
+async def _challenge_answer(
+    answer: str,
+    question: str,
+    evidence_summary: str,
+    llm: LLMClient,
+    store: InstanceStore | None = None,
+) -> ChallengeResult:
+    """Have a challenger LLM critique the answer for flaws."""
+    from synapse.chat.prompts import CHALLENGER_SYSTEM, CHALLENGER_USER
+    from synapse.models.reasoning import ChallengeResult
+
+    challenger_sys = store.get_prompt("challenger_system") if store else None
+    challenger_usr = store.get_prompt("challenger_user") if store else None
+
+    system = challenger_sys or CHALLENGER_SYSTEM
+    user = (challenger_usr or CHALLENGER_USER).format(
+        question=question,
+        answer=answer,
+        evidence_summary=evidence_summary,
+    )
+
+    try:
+        data = await llm.complete_json(system=system, user=user)
+    except Exception as e:
+        logger.warning("Challenger failed: %s", e)
+        return ChallengeResult(agree=True)
+
+    return ChallengeResult(
+        agree=bool(data.get("agree", True)),
+        critique=str(data.get("critique", "")),
+        issues=[str(i) for i in data.get("issues", [])],
+        suggested_improvements=[str(i) for i in data.get("suggested_improvements", [])],
+    )
+
+
 async def _enrich_from_answer(
     answer: str,
     question: str,
@@ -640,6 +675,12 @@ async def reason_full(
     cached_summary: str = "",
     compacted_turns: int = 0,
     context_max_tokens: int = _DEFAULT_CONTEXT_MAX_TOKENS,
+    on_step: Callable[[int, str, str], None] | None = None,
+    stream: bool = False,
+    debate: bool = False,
+    debate_max_rounds: int = 2,
+    debate_confidence_threshold: float = 0.7,
+    challenger_llm: LLMClient | None = None,
 ) -> ReasoningResult:
     """Execute a ReAct reasoning loop with enrichment, self-assessment, and episode logging.
 
@@ -702,15 +743,28 @@ async def reason_full(
             timed_out = True
             break
 
-        if verbose:
+        if stream or verbose:
             print(f"\n--- Step {step + 1} ({elapsed:.1f}s) ---")
 
-        response = await llm.complete_messages(
-            messages=messages, temperature=0.0, max_tokens=step_max_tokens
-        )
+        if stream:
+            # Stream tokens and accumulate full response — always print
+            response = ""
+            async for token in llm.complete_messages_stream(
+                messages=messages, temperature=0.0, max_tokens=step_max_tokens
+            ):
+                response += token
+                print(token, end="", flush=True)
+            print()  # newline after streaming
+        else:
+            response = await llm.complete_messages(
+                messages=messages, temperature=0.0, max_tokens=step_max_tokens
+            )
+            if verbose:
+                print(response)
 
-        if verbose:
-            print(response)
+        # Notify caller about this step
+        if on_step:
+            on_step(step + 1, "thinking", response)
 
         if len(response) > 600 and "Action:" not in response:
             truncated_for_history = "..." + response[-300:]
@@ -745,6 +799,8 @@ async def reason_full(
             answer = args
             steps_completed = step + 1
             actions_log.append({"tool": "ANSWER", "args": "", "observation": args})
+            if on_step:
+                on_step(step + 1, "answer", args)
             break
 
         multi_warning = ""
@@ -773,8 +829,8 @@ async def reason_full(
 
             actions_log.append({"tool": "GRAPH_QUERY", "args": args, "observation": result_full})
 
-            if verbose:
-                print(f"Result: {result_text[:500]}")
+            if stream or verbose:
+                print(f"  → {result_text}")
             messages.append(
                 {"role": "user", "content": f"Query result:\n{result_text}{multi_warning}"}
             )
@@ -782,8 +838,8 @@ async def reason_full(
         elif tool == "SECTION_TEXT":
             text = get_section_text(args, graph, text_cache)
             actions_log.append({"tool": "SECTION_TEXT", "args": args, "observation": text})
-            if verbose:
-                print(f"Section: {text[:500]}")
+            if stream or verbose:
+                print(f"  → Section: {text}")
             messages.append({"role": "user", "content": f"Section text:\n{text}{multi_warning}"})
 
         steps_completed = step + 1
@@ -839,6 +895,81 @@ async def reason_full(
         if assessment.gaps:
             print(f"Gaps: {', '.join(assessment.gaps)}")
 
+    # Phase 3B: Debate — challenger reviews the answer (optional)
+    challenge = None
+    debate_rounds = 0
+
+    if debate and assessment:
+        evidence_summary = _build_evidence_summary(actions_log)
+        for debate_round in range(debate_max_rounds):
+            # Only challenge if confidence/groundedness below threshold
+            if (assessment.confidence >= debate_confidence_threshold
+                    and assessment.groundedness >= debate_confidence_threshold):
+                break
+
+            logger.info("Debate round %d: challenging answer (confidence=%.2f, groundedness=%.2f)",
+                        debate_round + 1, assessment.confidence, assessment.groundedness)
+
+            challenge = await _challenge_answer(
+                answer=answer,
+                question=question,
+                evidence_summary=evidence_summary,
+                llm=challenger_llm or llm,
+                store=store,
+            )
+            debate_rounds += 1
+
+            if verbose:
+                print(f"\n--- Debate Round {debate_round + 1} ---")
+                print(f"Agree: {challenge.agree}")
+                print(f"Critique: {challenge.critique}")
+                if challenge.issues:
+                    print(f"Issues: {', '.join(challenge.issues)}")
+
+            if challenge.agree:
+                break
+
+            # Revision: add critique to messages and let reasoning agent fix
+            from synapse.chat.prompts import REVISION_USER
+            revision_prompt = REVISION_USER.format(
+                question=question,
+                previous_answer=answer,
+                critique=challenge.critique,
+                issues="\n".join(f"- {i}" for i in challenge.issues),
+                improvements="\n".join(f"- {i}" for i in challenge.suggested_improvements),
+            )
+            messages.append({"role": "user", "content": revision_prompt})
+
+            # Give agent a few more steps to revise
+            for revision_step in range(5):
+                response = await llm.complete_messages(
+                    messages=messages, temperature=0.0, max_tokens=step_max_tokens
+                )
+                messages.append({"role": "assistant", "content": response})
+                action = _parse_action(response)
+                if action and action[0] == "ANSWER":
+                    answer = action[1]
+                    actions_log.append({"tool": "REVISION", "args": f"round {debate_round + 1}", "observation": answer})
+                    break
+                elif action and action[0] == "GRAPH_QUERY":
+                    try:
+                        sanitized = _sanitize_cypher(action[1])
+                        result = graph.query(sanitized)
+                        result_text = _format_query_result(result)
+                    except Exception as e:
+                        result_text = f"(query error: {e})"
+                    messages.append({"role": "user", "content": f"Query result:\n{result_text}"})
+                    actions_log.append({"tool": "GRAPH_QUERY", "args": action[1], "observation": result_text})
+
+            # Re-assess after revision
+            assessment = await _assess_answer(
+                question=question, answer=answer, actions_log=actions_log, llm=llm, store=store,
+            )
+
+            if verbose and assessment:
+                print(f"\n--- Post-Revision Assessment ---")
+                print(f"Confidence: {assessment.confidence:.2f}  Groundedness: {assessment.groundedness:.2f}")
+
     # Phase 4: Enrichment — extract new knowledge from the answer
     enrichment = await _enrich_from_answer(
         answer=answer,
@@ -872,6 +1003,8 @@ async def reason_full(
         actions_log=actions_log,
         assessment=assessment,
         enrichment=enrichment,
+        challenge=challenge,
+        debate_rounds=debate_rounds,
     )
 
     # Phase 5: Log episode to SQLite

@@ -132,6 +132,33 @@ class LLMClient:
         content = response.choices[0].message.content or ""
         return content
 
+    async def complete_messages_stream(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+    ):
+        """Multi-turn streaming completion. Yields token strings as they arrive.
+
+        Usage::
+
+            full = ""
+            async for token in llm.complete_messages_stream(messages):
+                print(token, end="", flush=True)
+                full += token
+        """
+        stream = await self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                yield delta.content
+
     async def complete_json(
         self,
         system: str,

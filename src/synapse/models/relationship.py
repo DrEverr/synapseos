@@ -17,3 +17,5 @@ class Relationship(BaseModel):
     source_doc: str = ""
     source_section: str = ""
     verified: bool = True
+    created_at: str = ""
+    last_confirmed_at: str = ""

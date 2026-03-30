@@ -1,0 +1,8 @@
+{
+  "contradictory_pairs": [
+    ["CAUSES", "PROTECTS_AGAINST"],
+    ["COMPATIBLE_WITH", "INCOMPATIBLE_WITH"],
+    ["SUITABLE_FOR", "INEFFECTIVE_AGAINST"],
+    ["VULNERABLE_TO", "PROTECTS_AGAINST"]
+  ]
+}
