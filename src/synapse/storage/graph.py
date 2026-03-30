@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from falkordb import FalkorDB
@@ -107,12 +108,16 @@ class GraphStore:
                 ON CREATE SET n.id = $id, n.text = $text, n.name = $text,
                              n.confidence = $confidence, n.properties = $props,
                              n.source_docs = $source_doc,
-                             n.verified = $verified
+                             n.verified = $verified,
+                             n.source_text = $source_text,
+                             n.created_at = $now,
+                             n.last_confirmed_at = $now
                 ON MATCH SET n.confidence = CASE WHEN $confidence > n.confidence
                              THEN $confidence ELSE n.confidence END,
                              n.source_docs = n.source_docs + ', ' + $source_doc,
                              n.name = $text,
-                             n.verified = CASE WHEN n.verified = true THEN true ELSE $verified END""",
+                             n.verified = CASE WHEN n.verified = true THEN true ELSE $verified END,
+                             n.last_confirmed_at = $now""",
             params={
                 "canonical_name": entity.canonical_name,
                 "id": entity.id,
@@ -121,6 +126,8 @@ class GraphStore:
                 "props": props_json,
                 "source_doc": entity.source_doc,
                 "verified": entity.verified,
+                "source_text": entity.source_text,
+                "now": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
             },
         )
 
@@ -155,13 +162,17 @@ class GraphStore:
                           (b:{obj_label} {{canonical_name: $obj}})
                     MERGE (a)-[r:{pred}]->(b)
                     ON CREATE SET r.confidence = $confidence, r.source_doc = $source_doc,
-                                  r.verified = $verified""",
+                                  r.verified = $verified,
+                                  r.created_at = $now,
+                                  r.last_confirmed_at = $now
+                    ON MATCH SET r.last_confirmed_at = $now""",
                 params={
                     "subj": subj_name,
                     "obj": obj_name,
                     "confidence": rel.confidence,
                     "source_doc": rel.source_doc,
                     "verified": rel.verified,
+                    "now": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 },
             )
         except Exception as e:
@@ -253,6 +264,187 @@ class GraphStore:
             "[r in relationships(p) | type(r)] AS rels LIMIT 30",
             params={"name": canonical_name},
         )
+
+    def get_orphan_nodes(self) -> list:
+        """Return entity nodes that have no relationships (excluding Document/Section)."""
+        return self.query(
+            "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
+            "AND NOT (n)-[]-() "
+            "RETURN n.canonical_name, labels(n)[0], n.confidence "
+            "ORDER BY labels(n)[0], n.canonical_name"
+        )
+
+    def get_graph_health(self, ontology_types: dict[str, str] | None = None) -> dict:
+        """Return a health report for the knowledge graph."""
+        node_count = self.get_node_count()
+        edge_count = self.get_edge_count()
+
+        # Orphan nodes
+        orphan_rows = self.query(
+            "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
+            "AND NOT (n)-[]-() RETURN count(n)"
+        )
+        orphan_count = orphan_rows[0][0] if orphan_rows else 0
+
+        # Entity count (excluding Document/Section)
+        entity_rows = self.query(
+            "MATCH (n) WHERE NOT n:Document AND NOT n:Section RETURN count(n)"
+        )
+        entity_count = entity_rows[0][0] if entity_rows else 0
+
+        # Low confidence entities (< 0.6)
+        low_conf_ent = self.query(
+            "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
+            "AND n.confidence < 0.6 RETURN count(n)"
+        )
+        low_confidence_entities = low_conf_ent[0][0] if low_conf_ent else 0
+
+        # Low confidence relationships (< 0.6)
+        low_conf_rel = self.query(
+            "MATCH ()-[r]->() WHERE r.confidence < 0.6 "
+            "AND NOT type(r) IN ['BELONGS_TO', 'EXTRACTED_FROM'] RETURN count(r)"
+        )
+        low_confidence_relationships = low_conf_rel[0][0] if low_conf_rel else 0
+
+        # Unverified count
+        unverified_ent = self.query(
+            "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
+            "AND COALESCE(n.verified, true) = false RETURN count(n)"
+        )
+        unverified_count = unverified_ent[0][0] if unverified_ent else 0
+
+        # Average confidence
+        avg_conf = self.query(
+            "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
+            "AND n.confidence IS NOT NULL RETURN avg(n.confidence)"
+        )
+        avg_confidence = round(avg_conf[0][0], 3) if avg_conf and avg_conf[0][0] is not None else 0.0
+
+        # Relationship density (edges / entity nodes)
+        rel_count_rows = self.query(
+            "MATCH ()-[r]->() WHERE NOT type(r) IN ['BELONGS_TO', 'EXTRACTED_FROM'] "
+            "RETURN count(r)"
+        )
+        knowledge_edges = rel_count_rows[0][0] if rel_count_rows else 0
+        relationship_density = round(knowledge_edges / entity_count, 2) if entity_count > 0 else 0.0
+
+        # Unused ontology types
+        unused_types: list[str] = []
+        if ontology_types:
+            used_types_rows = self.query(
+                "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
+                "RETURN DISTINCT labels(n)[0]"
+            )
+            used_types = {row[0] for row in used_types_rows if row[0]}
+            unused_types = sorted(set(ontology_types.keys()) - used_types)
+
+        # Document coverage — sections with at least one EXTRACTED_FROM edge
+        total_sections = self.query("MATCH (s:Section) RETURN count(s)")
+        total_sec = total_sections[0][0] if total_sections else 0
+        covered_sections = self.query(
+            "MATCH (s:Section)<-[:EXTRACTED_FROM]-() RETURN count(DISTINCT s)"
+        )
+        covered_sec = covered_sections[0][0] if covered_sections else 0
+        document_coverage = round(covered_sec / total_sec * 100, 1) if total_sec > 0 else 0.0
+
+        return {
+            "nodes": node_count,
+            "edges": edge_count,
+            "entity_count": entity_count,
+            "orphan_nodes": orphan_count,
+            "low_confidence_entities": low_confidence_entities,
+            "low_confidence_relationships": low_confidence_relationships,
+            "unverified_count": unverified_count,
+            "avg_confidence": avg_confidence,
+            "relationship_density": relationship_density,
+            "unused_ontology_types": unused_types,
+            "document_coverage_pct": document_coverage,
+            "total_sections": total_sec,
+            "covered_sections": covered_sec,
+        }
+
+    def find_conflicts(self, rules: list[list[str]]) -> list[dict]:
+        """Find conflicting relationships based on contradictory predicate pairs.
+
+        rules: list of [pred1, pred2] pairs considered contradictory.
+        Returns list of dicts with subject, rel1, rel2, object, confidence1, confidence2.
+        """
+        conflicts: list[dict] = []
+        for pred1, pred2 in rules:
+            try:
+                rows = self.query(
+                    f"MATCH (a)-[r1:{pred1}]->(b), (a)-[r2:{pred2}]->(b) "
+                    "RETURN a.canonical_name, labels(a)[0], b.canonical_name, labels(b)[0], "
+                    "r1.confidence, r2.confidence"
+                )
+                for row in rows:
+                    conflicts.append({
+                        "subject": row[0],
+                        "subject_type": row[1],
+                        "object": row[2],
+                        "object_type": row[3],
+                        "rel1": pred1,
+                        "rel2": pred2,
+                        "confidence1": row[4],
+                        "confidence2": row[5],
+                    })
+            except Exception as e:
+                logger.debug("Conflict check failed for %s/%s: %s", pred1, pred2, e)
+        return conflicts
+
+    def get_decayed_entities(self, decay_rate: float = 0.99, threshold: float = 0.5) -> list:
+        """Return entities whose effective confidence (with time decay) is below threshold.
+
+        Uses lazy decay: effective = base_confidence * (decay_rate ^ days_since_confirmed).
+        """
+        try:
+            return self.query(
+                "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
+                "AND n.last_confirmed_at IS NOT NULL "
+                "AND n.confidence * ($decay_rate ^ "
+                "  duration.inDays(date(n.last_confirmed_at), date()).days"
+                ") < $threshold "
+                "RETURN n.canonical_name, labels(n)[0], n.confidence, "
+                "n.last_confirmed_at, "
+                "n.confidence * ($decay_rate ^ "
+                "  duration.inDays(date(n.last_confirmed_at), date()).days"
+                ") AS effective_confidence "
+                "ORDER BY effective_confidence ASC",
+                params={"decay_rate": decay_rate, "threshold": threshold},
+            )
+        except Exception:
+            # FalkorDB may not support duration functions — fallback without decay calc
+            logger.debug("Duration-based decay query not supported, using property-based fallback")
+            return self.query(
+                "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
+                "AND n.last_confirmed_at IS NOT NULL "
+                "RETURN n.canonical_name, labels(n)[0], n.confidence, "
+                "n.last_confirmed_at, n.confidence AS effective_confidence "
+                "ORDER BY n.confidence ASC",
+            )
+
+    def get_entity_provenance(self, entity_name: str) -> list[dict]:
+        """Get source provenance for an entity — source text, section, and document."""
+        rows = self.query(
+            "MATCH (n)-[:EXTRACTED_FROM]->(s:Section)-[:BELONGS_TO]->(d:Document) "
+            "WHERE toLower(n.canonical_name) CONTAINS toLower($name) "
+            "RETURN n.canonical_name, labels(n)[0], n.source_text, "
+            "s.title, s.id, d.title, d.filename "
+            "LIMIT 20",
+            params={"name": entity_name},
+        )
+        return [
+            {
+                "entity": row[0],
+                "entity_type": row[1],
+                "source_text": row[2] or "",
+                "section_title": row[3],
+                "section_id": row[4],
+                "doc_title": row[5],
+                "doc_filename": row[6],
+            }
+            for row in rows
+        ]
 
     def _section_to_dict(self, section: Any) -> dict:
         """Recursively convert a Section to a serializable dict."""

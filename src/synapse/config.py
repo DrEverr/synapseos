@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     bootstrap_max_entity_types: int = 35
     bootstrap_max_rel_types: int = 50
 
+    # Confidence decay
+    confidence_decay_rate: float = 0.99
+
     # Logging
     log_level: str = "INFO"
 
