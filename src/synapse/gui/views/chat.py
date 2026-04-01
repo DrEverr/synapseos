@@ -550,7 +550,7 @@ class ChatView(QWidget):
         if result.debate_rounds:
             metadata["debate_rounds"] = result.debate_rounds
         if result.challenge:
-            metadata["challenge"] = result.challenge.verdict
+            metadata["challenge"] = "agreed" if result.challenge.agree else "challenged"
 
         self._add_bubble(result.answer, is_user=False, metadata=metadata)
 

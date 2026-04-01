@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -183,8 +185,24 @@ class GraphInspectorView(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
+        # Toolbar
+        toolbar = QHBoxLayout()
         load_btn = QPushButton("Run Health Check")
         load_btn.clicked.connect(self._load_health)
+        self._health_delete_orphans_btn = QPushButton("Delete Orphan Nodes")
+        self._health_delete_orphans_btn.setProperty("secondary", True)
+        self._health_delete_orphans_btn.setToolTip("Remove entity nodes with no relationships")
+        self._health_delete_orphans_btn.clicked.connect(self._delete_orphan_nodes)
+        self._health_delete_orphans_btn.setEnabled(False)
+        self._health_remove_unused_btn = QPushButton("Remove Unused Types")
+        self._health_remove_unused_btn.setProperty("secondary", True)
+        self._health_remove_unused_btn.setToolTip("Remove entity types from ontology that have no instances in the graph")
+        self._health_remove_unused_btn.clicked.connect(self._remove_unused_types)
+        self._health_remove_unused_btn.setEnabled(False)
+        toolbar.addWidget(load_btn)
+        toolbar.addWidget(self._health_delete_orphans_btn)
+        toolbar.addWidget(self._health_remove_unused_btn)
+        toolbar.addStretch()
 
         # Stat cards row
         self._health_cards_layout = QGridLayout()
@@ -204,13 +222,15 @@ class GraphInspectorView(QWidget):
             self._health_labels[key] = card._value
             self._health_cards_layout.addWidget(card, i // 4, i % 4)
 
-        self._health_unused_label = QLabel("")
-        self._health_unused_label.setWordWrap(True)
-        self._health_unused_label.setStyleSheet("color: #8e8ea0; padding: 8px;")
+        # Unused ontology types — scrollable list
+        self._health_unused_list = QListWidget()
+        self._health_unused_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        self._health_unused_list.setMaximumHeight(160)
 
-        layout.addWidget(load_btn)
+        layout.addLayout(toolbar)
         layout.addLayout(self._health_cards_layout)
-        layout.addWidget(self._health_unused_label)
+        layout.addWidget(QLabel("Unused ontology types:"))
+        layout.addWidget(self._health_unused_list)
         layout.addStretch()
         return tab
 
@@ -218,8 +238,21 @@ class GraphInspectorView(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
+        toolbar = QHBoxLayout()
         load_btn = QPushButton("Detect Conflicts")
         load_btn.clicked.connect(self._load_conflicts)
+        self._conflict_reject1_btn = QPushButton("Reject Relation 1")
+        self._conflict_reject1_btn.setProperty("secondary", True)
+        self._conflict_reject1_btn.setToolTip("Delete the first relationship for the selected conflict")
+        self._conflict_reject1_btn.clicked.connect(lambda: self._reject_conflict_rel(1))
+        self._conflict_reject2_btn = QPushButton("Reject Relation 2")
+        self._conflict_reject2_btn.setProperty("secondary", True)
+        self._conflict_reject2_btn.setToolTip("Delete the second relationship for the selected conflict")
+        self._conflict_reject2_btn.clicked.connect(lambda: self._reject_conflict_rel(2))
+        toolbar.addWidget(load_btn)
+        toolbar.addWidget(self._conflict_reject1_btn)
+        toolbar.addWidget(self._conflict_reject2_btn)
+        toolbar.addStretch()
 
         self._conflicts_table = QTableWidget(0, 6)
         self._conflicts_table.setHorizontalHeaderLabels([
@@ -227,10 +260,11 @@ class GraphInspectorView(QWidget):
         ])
         self._conflicts_table.horizontalHeader().setStretchLastSection(True)
         self._conflicts_table.setSortingEnabled(True)
+        self._conflicts_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
 
         self._conflicts_count = QLabel("")
 
-        layout.addWidget(load_btn)
+        layout.addLayout(toolbar)
         layout.addWidget(self._conflicts_count)
         layout.addWidget(self._conflicts_table, stretch=1)
         return tab
@@ -239,8 +273,21 @@ class GraphInspectorView(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
+        toolbar = QHBoxLayout()
         load_btn = QPushButton("Find Decayed Entities")
         load_btn.clicked.connect(self._load_decayed)
+        self._decayed_reconfirm_btn = QPushButton("Re-confirm Selected")
+        self._decayed_reconfirm_btn.setProperty("secondary", True)
+        self._decayed_reconfirm_btn.setToolTip("Reset last_confirmed_at to today for selected entities")
+        self._decayed_reconfirm_btn.clicked.connect(self._reconfirm_selected)
+        self._decayed_delete_btn = QPushButton("Delete Selected")
+        self._decayed_delete_btn.setProperty("secondary", True)
+        self._decayed_delete_btn.setToolTip("Delete selected entities and their relationships")
+        self._decayed_delete_btn.clicked.connect(self._delete_decayed_selected)
+        toolbar.addWidget(load_btn)
+        toolbar.addWidget(self._decayed_reconfirm_btn)
+        toolbar.addWidget(self._decayed_delete_btn)
+        toolbar.addStretch()
 
         self._decayed_table = QTableWidget(0, 5)
         self._decayed_table.setHorizontalHeaderLabels([
@@ -248,10 +295,12 @@ class GraphInspectorView(QWidget):
         ])
         self._decayed_table.horizontalHeader().setStretchLastSection(True)
         self._decayed_table.setSortingEnabled(True)
+        self._decayed_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._decayed_table.setSelectionMode(QTableWidget.SelectionMode.MultiSelection)
 
         self._decayed_count = QLabel("")
 
-        layout.addWidget(load_btn)
+        layout.addLayout(toolbar)
         layout.addWidget(self._decayed_count)
         layout.addWidget(self._decayed_table, stretch=1)
         return tab
@@ -554,12 +603,77 @@ class GraphInspectorView(QWidget):
         self._health_labels["document_coverage_pct"].setText(
             f"{report['document_coverage_pct']}%"
         )
-        if report["unused_ontology_types"]:
-            self._health_unused_label.setText(
-                f"Unused ontology types: {', '.join(report['unused_ontology_types'])}"
-            )
-        else:
-            self._health_unused_label.setText("All ontology types are in use.")
+
+        # Populate unused types list
+        self._health_unused_list.clear()
+        unused = report.get("unused_ontology_types", [])
+        for t in unused:
+            self._health_unused_list.addItem(t)
+        if not unused:
+            self._health_unused_list.addItem("(all types in use)")
+
+        # Enable/disable action buttons based on results
+        self._health_delete_orphans_btn.setEnabled(report["orphan_nodes"] > 0)
+        self._health_remove_unused_btn.setEnabled(len(unused) > 0)
+
+    @Slot()
+    def _delete_orphan_nodes(self) -> None:
+        reply = QMessageBox.question(
+            self, "Delete Orphan Nodes",
+            "Delete all entity nodes that have no relationships?\nThis cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            graph = self._bridge.get_graph()
+            count = graph.delete_orphan_nodes()
+            QMessageBox.information(self, "Done", f"Deleted {count} orphan node(s).")
+            self._load_health()  # refresh
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to delete orphan nodes: {e}")
+
+    @Slot()
+    def _remove_unused_types(self) -> None:
+        selected = [item.text() for item in self._health_unused_list.selectedItems()]
+        if not selected:
+            # If nothing selected, remove all unused
+            selected = [
+                self._health_unused_list.item(i).text()
+                for i in range(self._health_unused_list.count())
+                if self._health_unused_list.item(i).text() != "(all types in use)"
+            ]
+        if not selected:
+            return
+
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QTextBrowser
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Remove Unused Types")
+        dialog.setMinimumSize(400, 300)
+        dlg_layout = QVBoxLayout(dialog)
+        dlg_layout.addWidget(QLabel(
+            f"Remove {len(selected)} unused ontology type(s) from the active version?\n"
+            "This cannot be undone."
+        ))
+        listing = QTextBrowser()
+        listing.setPlainText("\n".join(f"  - {t}" for t in selected))
+        listing.setReadOnly(True)
+        dlg_layout.addWidget(listing, stretch=1)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Yes | QDialogButtonBox.StandardButton.No
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        dlg_layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            store = self._bridge.get_store()
+            count = store.delete_entity_types(selected)
+            QMessageBox.information(self, "Done", f"Removed {count} entity type(s).")
+            self._load_health()  # refresh
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to remove types: {e}")
 
     @Slot()
     def _load_conflicts(self) -> None:
@@ -672,3 +786,117 @@ class GraphInspectorView(QWidget):
                 f"{r['doc_title']} ({r['doc_filename']})" if r.get("doc_title") else ""
             ))
         self._provenance_table.resizeColumnsToContents()
+
+    # -- Conflict actions ------------------------------------------------------
+
+    def _reject_conflict_rel(self, which: int) -> None:
+        """Reject relation 1 or 2 for selected conflict rows."""
+        selected_rows = sorted({idx.row() for idx in self._conflicts_table.selectedIndexes()})
+        if not selected_rows:
+            QMessageBox.information(self, "Select", "Select a conflict row first.")
+            return
+
+        col_subj = 0
+        col_rel = 1 if which == 1 else 2
+        col_obj = 3
+
+        items = []
+        for row in selected_rows:
+            subj = self._conflicts_table.item(row, col_subj).text()
+            pred = self._conflicts_table.item(row, col_rel).text()
+            obj = self._conflicts_table.item(row, col_obj).text()
+            items.append((subj, pred, obj))
+
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QTextBrowser
+        desc = "\n".join(f"  {s} -[{p}]-> {o}" for s, p, o in items)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Reject Relationship")
+        dialog.setMinimumSize(500, 300)
+        dlg_layout = QVBoxLayout(dialog)
+        dlg_layout.addWidget(QLabel(f"Delete {len(items)} relationship(s)? This cannot be undone."))
+        listing = QTextBrowser()
+        listing.setPlainText(desc)
+        listing.setReadOnly(True)
+        dlg_layout.addWidget(listing, stretch=1)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Yes | QDialogButtonBox.StandardButton.No
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        dlg_layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        try:
+            graph = self._bridge.get_graph()
+            deleted = 0
+            for subj, pred, obj in items:
+                deleted += graph.delete_relationship(subj, pred, obj)
+            QMessageBox.information(self, "Done", f"Deleted {deleted} relationship(s).")
+            self._load_conflicts()  # refresh
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to delete: {e}")
+
+    # -- Decayed actions -------------------------------------------------------
+
+    def _get_selected_decayed_names(self) -> list[str]:
+        """Get canonical_names from selected rows in decayed table."""
+        selected_rows = sorted({idx.row() for idx in self._decayed_table.selectedIndexes()})
+        return [self._decayed_table.item(row, 0).text() for row in selected_rows if self._decayed_table.item(row, 0)]
+
+    @Slot()
+    def _reconfirm_selected(self) -> None:
+        names = self._get_selected_decayed_names()
+        if not names:
+            QMessageBox.information(self, "Select", "Select entities to re-confirm first.")
+            return
+        reply = QMessageBox.question(
+            self, "Re-confirm",
+            f"Re-confirm {len(names)} entit{'y' if len(names) == 1 else 'ies'}?\n"
+            "This resets last_confirmed_at to today.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            graph = self._bridge.get_graph()
+            count = graph.reconfirm_entities(names)
+            QMessageBox.information(self, "Done", f"Re-confirmed {count} entit{'y' if count == 1 else 'ies'}.")
+            self._load_decayed()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to re-confirm: {e}")
+
+    @Slot()
+    def _delete_decayed_selected(self) -> None:
+        names = self._get_selected_decayed_names()
+        if not names:
+            QMessageBox.information(self, "Select", "Select entities to delete first.")
+            return
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QTextBrowser
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Delete Entities")
+        dialog.setMinimumSize(400, 300)
+        dlg_layout = QVBoxLayout(dialog)
+        dlg_layout.addWidget(QLabel(
+            f"Delete {len(names)} entit{'y' if len(names) == 1 else 'ies'} "
+            "and their relationships? This cannot be undone."
+        ))
+        listing = QTextBrowser()
+        listing.setPlainText("\n".join(f"  - {n}" for n in names))
+        listing.setReadOnly(True)
+        dlg_layout.addWidget(listing, stretch=1)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Yes | QDialogButtonBox.StandardButton.No
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        dlg_layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            graph = self._bridge.get_graph()
+            count = graph.delete_entities_by_name(names)
+            QMessageBox.information(self, "Done", f"Deleted {count} entit{'y' if count == 1 else 'ies'}.")
+            self._load_decayed()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to delete: {e}")
