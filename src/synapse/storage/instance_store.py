@@ -271,6 +271,22 @@ class InstanceStore:
         ).fetchall()
         return {r["type_name"]: json.loads(r["properties"]) for r in rows}
 
+    def delete_entity_types(self, type_names: list[str], version_id: int | None = None) -> int:
+        """Delete entity types by name from the active (or specified) version."""
+        vid = version_id or self.get_active_version_id()
+        if vid is None:
+            return 0
+        count = 0
+        for name in type_names:
+            cur = self._conn.execute(
+                "DELETE FROM entity_types WHERE version_id = ? AND type_name = ?",
+                (vid, name),
+            )
+            count += cur.rowcount
+        self._conn.commit()
+        logger.info("Deleted %d entity types from version %d", count, vid)
+        return count
+
     # ── Relationship Types ────────────────────────────────────
 
     def store_relationship_type(

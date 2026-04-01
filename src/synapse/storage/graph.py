@@ -446,6 +446,48 @@ class GraphStore:
             for row in rows
         ]
 
+    def delete_orphan_nodes(self) -> int:
+        """Delete entity nodes that have no relationships. Returns count deleted."""
+        result = self.query(
+            "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
+            "AND NOT (n)-[]-() "
+            "WITH n, n.canonical_name AS name "
+            "DELETE n RETURN count(name)"
+        )
+        count = result[0][0] if result else 0
+        logger.info("Deleted %d orphan nodes", count)
+        return count
+
+    def reconfirm_entities(self, canonical_names: list[str]) -> int:
+        """Update last_confirmed_at to today for the given entities. Returns count updated."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        count = 0
+        for name in canonical_names:
+            result = self.query(
+                "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
+                "AND n.canonical_name = $name "
+                "SET n.last_confirmed_at = $today "
+                "RETURN count(n)",
+                params={"name": name, "today": today},
+            )
+            count += result[0][0] if result else 0
+        logger.info("Re-confirmed %d entities", count)
+        return count
+
+    def delete_entities_by_name(self, canonical_names: list[str]) -> int:
+        """Delete entities by canonical_name (detach delete). Returns count deleted."""
+        count = 0
+        for name in canonical_names:
+            result = self.query(
+                "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
+                "AND n.canonical_name = $name "
+                "DETACH DELETE n RETURN count(n)",
+                params={"name": name},
+            )
+            count += result[0][0] if result else 0
+        logger.info("Deleted %d entities", count)
+        return count
+
     def _section_to_dict(self, section: Any) -> dict:
         """Recursively convert a Section to a serializable dict."""
         return {
@@ -500,6 +542,15 @@ class GraphStore:
             "SET r.verified = true",
             params={"subj": subj, "obj": obj},
         )
+
+    def delete_relationship(self, subj: str, predicate: str, obj: str) -> int:
+        """Unconditionally delete a relationship. Returns count deleted."""
+        result = self.query(
+            f"MATCH (a {{canonical_name: $subj}})-[r:{predicate}]->(b {{canonical_name: $obj}}) "
+            "DELETE r RETURN count(r)",
+            params={"subj": subj, "obj": obj},
+        )
+        return result[0][0] if result else 0
 
     def reject_relationship(self, subj: str, predicate: str, obj: str) -> None:
         """Delete an unverified relationship."""
