@@ -1,0 +1,14 @@
+__pycache__
+*.pyc
+.git
+.env
+*.egg-info
+dist
+build
+tests
+docs
+scripts
+.ruff_cache
+.mypy_cache
+.pytest_cache
+src/synapse/gui

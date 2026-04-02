@@ -1,0 +1,116 @@
+/* SynapseOS Web Demo — custom styles */
+
+:root {
+    --accent: #6366f1;
+    --accent-light: #818cf8;
+    --accent-bg: #eef2ff;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+}
+
+body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* Chat bubbles */
+.bubble-user {
+    background: var(--accent);
+    color: white;
+    border-radius: 18px 18px 4px 18px;
+}
+
+.bubble-assistant {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 18px 18px 18px 4px;
+}
+
+.bubble-assistant pre {
+    background: #f1f5f9;
+    border-radius: 8px;
+    padding: 12px;
+    overflow-x: auto;
+    font-size: 13px;
+}
+
+.bubble-assistant code {
+    background: #f1f5f9;
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+.bubble-assistant pre code {
+    background: none;
+    padding: 0;
+}
+
+.bubble-assistant table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 8px 0;
+}
+
+.bubble-assistant th,
+.bubble-assistant td {
+    border: 1px solid #e2e8f0;
+    padding: 6px 10px;
+    text-align: left;
+}
+
+.bubble-assistant th {
+    background: #f1f5f9;
+    font-weight: 600;
+}
+
+/* Reasoning steps animation */
+@keyframes pulse-dot {
+    0%, 80%, 100% { opacity: 0.3; }
+    40% { opacity: 1; }
+}
+
+.thinking-dot {
+    animation: pulse-dot 1.4s infinite ease-in-out;
+}
+
+.thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* Step card slide-in */
+@keyframes slide-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.step-card {
+    animation: slide-in 0.3s ease-out;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+/* Badge */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-size: 12px;
+    font-weight: 500;
+}
