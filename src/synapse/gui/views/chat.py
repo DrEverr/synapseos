@@ -496,6 +496,9 @@ class ChatView(QWidget):
                     challenger_llm=challenger_llm,
                 )
             finally:
+                await llm.close()
+                if challenger_llm:
+                    await challenger_llm.close()
                 store.close()
 
         worker = AsyncWorker(make_coro)
@@ -584,7 +587,7 @@ class ChatView(QWidget):
         """Auto-name session in background after first turn."""
         settings = self._bridge.settings
 
-        def make_coro():
+        async def make_coro():
             from synapse.llm.client import LLMClient
             llm = LLMClient(
                 api_key=settings.llm_api_key,
@@ -592,13 +595,16 @@ class ChatView(QWidget):
                 model=settings.compaction_model,
                 timeout=settings.llm_timeout,
             )
-            return llm.complete(
-                system="Generate a short session name (2-5 words, lowercase, no quotes) "
-                       "that captures the topic of this question. Reply with ONLY the name.",
-                user=question,
-                temperature=0.0,
-                max_tokens=20,
-            )
+            try:
+                return await llm.complete(
+                    system="Generate a short session name (2-5 words, lowercase, no quotes) "
+                           "that captures the topic of this question. Reply with ONLY the name.",
+                    user=question,
+                    temperature=0.0,
+                    max_tokens=20,
+                )
+            finally:
+                await llm.close()
 
         worker = AsyncWorker(make_coro)
         self._active_workers.add(worker)
