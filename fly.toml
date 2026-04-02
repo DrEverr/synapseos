@@ -1,0 +1,20 @@
+app = "synapse-wacker-demo"
+primary_region = "waw"
+
+[build]
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[env]
+  SYNAPSE_GRAPH_NAME = "wacker"
+  SYNAPSE_FALKORDB_HOST = "synapse-wacker-falkordb.internal"
+  SYNAPSE_FALKORDB_PORT = "6379"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "1gb"

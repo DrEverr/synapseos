@@ -157,6 +157,11 @@ def _parse_action(text: str) -> tuple[str, str, bool] | None:
     return None
 
 
+def _clean_answer(text: str) -> str:
+    """Clean up literal escape sequences that LLMs sometimes produce."""
+    return text.replace(r"\n", "\n").replace(r"\t", "\t").replace(r"\_", "_")
+
+
 def _extract_inline_answer(text: str) -> str:
     """Extract an answer from text that doesn't use the ANSWER() format."""
     if not text or not text.strip():
@@ -777,7 +782,7 @@ async def reason_full(
             # Log the unparsed response as a "THOUGHT" step
             actions_log.append({"tool": "THOUGHT", "args": "", "observation": response})
             if "answer" in response.lower() and step > 0:
-                answer = _extract_inline_answer(response)
+                answer = _clean_answer(_extract_inline_answer(response))
                 steps_completed = step + 1
                 break
             messages.append(
@@ -796,7 +801,7 @@ async def reason_full(
         tool, args, had_multi = action
 
         if tool == "ANSWER":
-            answer = args
+            answer = _clean_answer(args)
             steps_completed = step + 1
             actions_log.append({"tool": "ANSWER", "args": "", "observation": args})
             if on_step:
@@ -869,9 +874,9 @@ async def reason_full(
         final = await llm.complete_messages(messages=messages, temperature=0.0, max_tokens=1024)
         final_action = _parse_action(final)
         if final_action and final_action[0] == "ANSWER":
-            answer = final_action[1]
+            answer = _clean_answer(final_action[1])
         else:
-            answer = _extract_inline_answer(final)
+            answer = _clean_answer(_extract_inline_answer(final))
 
     elapsed_total = time.monotonic() - t0
 

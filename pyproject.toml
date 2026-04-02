@@ -32,10 +32,16 @@ dev = [
 gui = [
     "PySide6>=6.6",
 ]
+web = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+]
 
 [project.scripts]
 synapse = "synapse.cli:main"
 synapse-gui = "synapse.gui.app:main"
+synapse-web = "synapse.web.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

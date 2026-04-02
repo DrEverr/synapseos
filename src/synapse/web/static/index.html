@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SynapseOS — Wacker Knowledge Base</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="/css/app.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: { extend: { colors: {
+                accent: { DEFAULT: '#6366f1', light: '#818cf8', bg: '#eef2ff' },
+            }}}
+        }
+    </script>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+
+<!-- ====== LOGIN SCREEN ====== -->
+<template x-if="!loggedIn">
+<div x-data="loginApp()" class="flex items-center justify-center min-h-screen bg-gradient-to-br from-indigo-50 to-white">
+    <div class="bg-white rounded-2xl shadow-lg p-8 w-full max-w-sm">
+        <div class="text-center mb-6">
+            <div class="text-3xl font-bold text-accent mb-1">SynapseOS</div>
+            <div class="text-gray-500 text-sm">Wacker Knowledge Base Demo</div>
+        </div>
+        <form @submit.prevent="login" class="space-y-4">
+            <input x-model="user" type="text" placeholder="Username" required
+                   class="w-full px-4 py-2.5 rounded-lg border border-gray-200 focus:border-accent focus:ring-2 focus:ring-accent/20 outline-none">
+            <input x-model="pass" type="password" placeholder="Password" required
+                   class="w-full px-4 py-2.5 rounded-lg border border-gray-200 focus:border-accent focus:ring-2 focus:ring-accent/20 outline-none">
+            <button type="submit" class="w-full py-2.5 bg-accent text-white rounded-lg font-medium hover:bg-accent-light transition">
+                Sign In
+            </button>
+            <p x-show="error" x-text="error" class="text-red-500 text-sm text-center"></p>
+        </form>
+    </div>
+</div>
+</template>
+
+<!-- ====== MAIN APP ====== -->
+<template x-if="loggedIn">
+<div x-data="mainApp()" x-init="init()" class="flex h-screen overflow-hidden">
+
+    <!-- Sidebar -->
+    <aside class="w-56 bg-white border-r border-gray-200 flex flex-col shrink-0">
+        <div class="px-5 py-5 border-b border-gray-100">
+            <div class="text-xl font-bold text-accent">SynapseOS</div>
+            <div class="text-xs text-gray-400 mt-0.5">Wacker Demo</div>
+        </div>
+        <nav class="flex-1 p-3 space-y-1">
+            <button @click="switchTab('chat')" :class="tab==='chat' ? 'bg-accent/10 text-accent font-semibold' : 'text-gray-600 hover:bg-gray-100'" class="w-full text-left px-3 py-2 rounded-lg text-sm transition">
+                Chat
+            </button>
+            <button @click="switchTab('documents')" :class="tab==='documents' ? 'bg-accent/10 text-accent font-semibold' : 'text-gray-600 hover:bg-gray-100'" class="w-full text-left px-3 py-2 rounded-lg text-sm transition">
+                Documents
+            </button>
+            <button @click="switchTab('review')" :class="tab==='review' ? 'bg-accent/10 text-accent font-semibold' : 'text-gray-600 hover:bg-gray-100'" class="w-full text-left px-3 py-2 rounded-lg text-sm transition">
+                Review
+            </button>
+        </nav>
+        <div class="p-3 border-t border-gray-100">
+            <button @click="loggedIn=false; localStorage.removeItem('synapse_creds')" class="w-full text-left px-3 py-2 text-gray-400 hover:text-red-500 text-xs transition">
+                Sign Out
+            </button>
+        </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="flex-1 flex overflow-hidden">
+
+        <!-- ====== CHAT TAB ====== -->
+        <template x-if="tab === 'chat'">
+        <div class="flex flex-1 overflow-hidden">
+            <!-- Session list -->
+            <div class="w-52 bg-gray-50 border-r border-gray-200 flex flex-col shrink-0">
+                <div class="p-3 border-b border-gray-100">
+                    <button @click="newSession()" class="w-full py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent-light transition">
+                        New Session
+                    </button>
+                </div>
+                <div class="flex-1 overflow-y-auto p-2 space-y-1">
+                    <template x-for="s in sessions" :key="s.session_id">
+                        <div class="flex items-center group">
+                            <button @click="resumeSession(s)"
+                                    :class="currentSession === s.session_id ? 'bg-accent/10 text-accent' : 'text-gray-600 hover:bg-gray-100'"
+                                    class="flex-1 text-left px-3 py-2 rounded-lg text-xs truncate transition">
+                                <span x-text="s.name || s.session_id.slice(0,8)"></span>
+                                <span class="text-gray-400 ml-1" x-text="'(' + (s.episode_count || 0) + ')'"></span>
+                            </button>
+                            <button @click.stop="deleteSession(s.session_id)"
+                                    class="opacity-0 group-hover:opacity-100 px-1.5 text-gray-400 hover:text-red-500 text-xs transition"
+                                    title="Delete session">&times;</button>
+                        </div>
+                    </template>
+                </div>
+                <div class="p-2 border-t border-gray-100">
+                    <button @click="exportSession()" class="w-full py-1.5 text-xs text-gray-500 hover:text-accent border border-gray-200 rounded-lg transition">
+                        Export MD
+                    </button>
+                </div>
+            </div>
+
+            <!-- Chat area -->
+            <div class="flex-1 flex flex-col">
+                <!-- Messages -->
+                <div id="chat-messages" class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+                    <template x-if="messages.length === 0">
+                        <div class="flex items-center justify-center h-full text-gray-400">
+                            <div class="text-center">
+                                <div class="text-4xl mb-3">&#x2B21;</div>
+                                <div class="text-lg font-medium">Ask a question about Wacker products</div>
+                                <div class="text-sm mt-1">The AI will search the knowledge graph and reason through documents</div>
+                            </div>
+                        </div>
+                    </template>
+                    <template x-for="(msg, idx) in messages" :key="idx">
+                        <div :class="msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'">
+                            <div :class="msg.role === 'user' ? 'bubble-user px-4 py-2.5 max-w-xl' : 'bubble-assistant px-5 py-3 max-w-2xl'"
+                                 class="text-sm leading-relaxed">
+                                <div x-show="msg.role === 'user'" x-text="msg.text"></div>
+                                <div x-show="msg.role === 'assistant'" x-html="renderMarkdown(msg.text)"></div>
+                                <!-- Quality badges -->
+                                <div x-show="msg.role === 'assistant' && msg.confidence" class="flex gap-2 mt-2 flex-wrap">
+                                    <span class="badge bg-indigo-100 text-indigo-700" x-text="'Confidence ' + Math.round((msg.confidence||0)*100) + '%'"></span>
+                                    <span class="badge bg-emerald-100 text-emerald-700" x-text="'Grounded ' + Math.round((msg.groundedness||0)*100) + '%'"></span>
+                                    <span class="badge bg-gray-100 text-gray-600" x-text="(msg.steps||0) + ' steps'"></span>
+                                    <span class="badge bg-gray-100 text-gray-600" x-text="(msg.elapsed||0) + 's'"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Thinking indicator -->
+                    <template x-if="sending">
+                        <div class="flex justify-start">
+                            <div class="bubble-assistant px-5 py-3 max-w-2xl">
+                                <div class="flex items-center gap-2 text-gray-400 text-sm mb-2">
+                                    <span class="thinking-dot w-1.5 h-1.5 bg-accent rounded-full inline-block"></span>
+                                    <span class="thinking-dot w-1.5 h-1.5 bg-accent rounded-full inline-block"></span>
+                                    <span class="thinking-dot w-1.5 h-1.5 bg-accent rounded-full inline-block"></span>
+                                    <span class="ml-1">Reasoning...</span>
+                                </div>
+                                <!-- Live reasoning steps -->
+                                <div class="space-y-1.5">
+                                    <template x-for="(st, si) in steps" :key="si">
+                                        <div class="step-card text-xs bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
+                                            <span class="font-semibold text-accent">Step <span x-text="st.step"></span></span>
+                                            <span class="text-gray-400 mx-1">&middot;</span>
+                                            <span class="text-gray-500" x-text="st.phase"></span>
+                                            <div x-show="st.content" class="text-gray-400 mt-1 whitespace-pre-wrap break-words" x-text="st.content"></div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- Input -->
+                <div class="border-t border-gray-200 px-6 py-3">
+                    <form @submit.prevent="sendMessage()" class="flex gap-3">
+                        <input x-model="input" type="text" placeholder="Ask about Wacker products, chemicals, applications..."
+                               :disabled="sending"
+                               class="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 focus:border-accent focus:ring-2 focus:ring-accent/20 outline-none text-sm disabled:opacity-50">
+                        <button type="submit" :disabled="sending || !input.trim()"
+                                class="px-6 py-2.5 bg-accent text-white rounded-xl text-sm font-medium hover:bg-accent-light transition disabled:opacity-50">
+                            Send
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        </template>
+
+        <!-- ====== DOCUMENTS TAB ====== -->
+        <template x-if="tab === 'documents'">
+        <div class="flex-1 overflow-y-auto p-8">
+            <h1 class="text-2xl font-bold mb-6">Documents</h1>
+
+            <!-- Upload -->
+            <div class="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+                <h2 class="font-semibold mb-3">Upload PDF</h2>
+                <input type="file" accept=".pdf" @change="uploadFile($event)" :disabled="uploading"
+                       class="text-sm file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:bg-accent file:text-white file:font-medium file:cursor-pointer hover:file:bg-accent-light">
+                <p x-show="uploadStatus" x-text="uploadStatus" class="text-sm mt-3" :class="uploading ? 'text-amber-600' : 'text-green-600'"></p>
+            </div>
+
+            <!-- Document list -->
+            <div class="bg-white rounded-xl border border-gray-200">
+                <div class="px-6 py-4 border-b border-gray-100 font-semibold">Ingested Documents</div>
+                <template x-if="documents.length === 0">
+                    <div class="px-6 py-8 text-center text-gray-400">No documents yet</div>
+                </template>
+                <template x-for="d in documents" :key="d.id">
+                    <div class="px-6 py-3 border-b border-gray-50 flex items-center justify-between">
+                        <div>
+                            <div class="font-medium text-sm" x-text="d.title || d.filename"></div>
+                            <div class="text-xs text-gray-400" x-text="d.filename"></div>
+                        </div>
+                        <span class="badge bg-gray-100 text-gray-600" x-text="(d.page_count || '?') + ' pages'"></span>
+                    </div>
+                </template>
+            </div>
+        </div>
+        </template>
+
+        <!-- ====== REVIEW TAB ====== -->
+        <template x-if="tab === 'review'">
+        <div class="flex-1 overflow-y-auto p-8">
+            <div class="flex items-center justify-between mb-6">
+                <h1 class="text-2xl font-bold">Review</h1>
+                <button @click="verifyAll()" class="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-medium hover:bg-emerald-600 transition">
+                    Accept All
+                </button>
+            </div>
+
+            <!-- Entities -->
+            <div class="bg-white rounded-xl border border-gray-200 mb-6">
+                <div class="px-6 py-4 border-b border-gray-100 font-semibold">
+                    Unverified Entities <span class="text-gray-400 font-normal" x-text="'(' + unverifiedEntities.length + ')'"></span>
+                </div>
+                <template x-if="unverifiedEntities.length === 0">
+                    <div class="px-6 py-6 text-center text-gray-400 text-sm">All entities verified</div>
+                </template>
+                <div class="divide-y divide-gray-50">
+                    <template x-for="e in unverifiedEntities" :key="e.canonical_name">
+                        <div class="px-6 py-3 flex items-center justify-between">
+                            <div class="flex-1 min-w-0">
+                                <span class="font-medium text-sm" x-text="e.canonical_name"></span>
+                                <span class="badge bg-indigo-100 text-indigo-700 ml-2" x-text="e.entity_type"></span>
+                                <span class="text-xs text-gray-400 ml-2" x-text="'conf: ' + (e.confidence||0).toFixed(2)"></span>
+                            </div>
+                            <div class="flex gap-2 ml-4 shrink-0">
+                                <button @click="verifyEntity(e)" class="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-xs font-medium hover:bg-emerald-200">Accept</button>
+                                <button @click="rejectEntity(e)" class="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-xs font-medium hover:bg-red-200">Reject</button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Relationships -->
+            <div class="bg-white rounded-xl border border-gray-200">
+                <div class="px-6 py-4 border-b border-gray-100 font-semibold">
+                    Unverified Relationships <span class="text-gray-400 font-normal" x-text="'(' + unverifiedRels.length + ')'"></span>
+                </div>
+                <template x-if="unverifiedRels.length === 0">
+                    <div class="px-6 py-6 text-center text-gray-400 text-sm">All relationships verified</div>
+                </template>
+                <div class="divide-y divide-gray-50">
+                    <template x-for="r in unverifiedRels" :key="r.subject + r.predicate + r.object">
+                        <div class="px-6 py-3 flex items-center justify-between">
+                            <div class="flex-1 min-w-0 text-sm">
+                                <span class="font-medium" x-text="r.subject"></span>
+                                <span class="text-accent mx-1" x-text="'[' + r.predicate + ']'"></span>
+                                <span class="font-medium" x-text="r.object"></span>
+                                <span class="text-xs text-gray-400 ml-2" x-text="'conf: ' + (r.confidence||0).toFixed(2)"></span>
+                            </div>
+                            <div class="flex gap-2 ml-4 shrink-0">
+                                <button @click="verifyRel(r)" class="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-xs font-medium hover:bg-emerald-200">Accept</button>
+                                <button @click="rejectRel(r)" class="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-xs font-medium hover:bg-red-200">Reject</button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+        </template>
+
+    </main>
+</div>
+</template>
+
+<script src="/js/app.js"></script>
+<script>
+    // Global reactive state for login
+    document.addEventListener('alpine:init', () => {
+        Alpine.data('loginCheck', () => ({}));
+    });
+    // Check if logged in
+    const loggedIn = Alpine.reactive({ value: !!localStorage.getItem('synapse_creds') });
+</script>
+<!-- Wrap body in Alpine scope for login/app switching -->
+<script>
+    // Override: use a simpler approach with x-data on body
+    document.body.setAttribute('x-data', '{ loggedIn: !!localStorage.getItem("synapse_creds") }');
+</script>
+</body>
+</html>
