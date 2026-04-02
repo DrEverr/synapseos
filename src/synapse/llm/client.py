@@ -83,6 +83,13 @@ class LLMClient:
         # Disable the SDK's built-in retries — tenacity handles retry logic
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0)
 
+    async def close(self) -> None:
+        """Close the underlying HTTP client to avoid event-loop-closed errors."""
+        try:
+            await self._client.close()
+        except Exception:
+            pass
+
     @retry(**_RETRY_POLICY)
     async def complete(
         self,
