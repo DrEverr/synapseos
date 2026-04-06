@@ -85,7 +85,9 @@ RULES:
 2. Do NOT extract boilerplate (legal disclaimers, company addresses)
 3. Prefer specific types over generic ones
 4. For measurements, include the unit in the text span
-5. For properties with values, extract BOTH the property name AND its value as separate entities
+5. For properties with values, the "text" field MUST include both the property name AND its value+unit
+   (e.g., "viscosity: 100 mPa·s at 25°C" not just "viscosity") — this prevents value loss during storage
+6. Do NOT extract generic property names without values (e.g., "density" alone is useless)
 
 Text to extract from:
 "{section_text}"
