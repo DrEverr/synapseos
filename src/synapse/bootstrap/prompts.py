@@ -82,6 +82,17 @@ GUIDELINES:
 - Include types for quantifiable thresholds, ranges, and conditions that govern domain behavior
 - Include types for compatibility, substitutability, and exclusion relationships between domain elements
 
+CRITICAL — Avoid shared-node value loss:
+- Entities are stored via MERGE on their text/name. If multiple subjects share the same
+  property NAME (e.g., "viscosity"), they will collapse into ONE node and values are lost.
+- For any entity type that carries a measurable value, the entity text MUST include both
+  the property name AND its value+unit, e.g., "viscosity: 100 mPa·s" not just "viscosity".
+- This ensures each subject gets its own node with its own value after MERGE.
+- WRONG entity design: type=PHYSICAL_PROPERTY, text="viscosity" (shared across all products)
+- RIGHT entity design: type=PHYSICAL_PROPERTY, text="viscosity: 100 mPa·s at 25°C" (unique per product)
+- General rule: if a query "What is property X of subject Y?" would require more than 1 hop
+  from subject to value, the ontology needs flattening — the value must be reachable in 1 hop.
+
 Return a JSON object with:
 - "entity_types": object mapping TYPE_NAME to description string
 - "relationship_types": object mapping TYPE_NAME to description string
@@ -157,6 +168,11 @@ REFINEMENT TASKS:
    relationship type (e.g., APPLIES_TO) that links the outcome back to the entity it belongs to
 8. Verify depth — the ontology should answer "why/how", not just "what": add types for underlying
    mechanisms, risks, quantifiable thresholds, or compatibility constraints if absent and relevant
+9. Check for shared-node value loss: for each entity type that carries a measurable value
+   (property, measurement, dosage, etc.), verify the type description states that the entity
+   text MUST include the value+unit — not just the property name. Entities are stored via MERGE
+   on text, so "viscosity" from 10 products would collapse into one node losing all values.
+   Correct: "viscosity: 100 mPa·s at 25°C". The description must make this explicit.
 
 Return a JSON object with:
 - "entity_types": refined mapping of TYPE_NAME to description
@@ -234,6 +250,13 @@ IMPORTANT RULES:
 - Prompts should be in the same language as the documents ({language})... but system instructions in English
 - The reasoning_system prompt should include domain-relevant Cypher query examples
 - All prompts should enforce structured JSON output where applicable
+- CRITICAL for entity_extraction prompts: for any entity type that carries a measurable value
+  (physical properties, measurements, dosages, concentrations, etc.), the extraction prompt
+  MUST instruct the LLM to include the value+unit in the "text" field, not just the property name.
+  Example: text="viscosity: 100 mPa·s at 25°C" NOT text="viscosity".
+  This is essential because entities are stored via MERGE on their text — if the value is only
+  in "properties" dict, multiple subjects sharing the same property name will collapse into
+  one node and all values except the first will be lost.
 
 Return the JSON object with all 10 prompt keys. Return ONLY the JSON, nothing else."""
 
