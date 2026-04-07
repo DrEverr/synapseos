@@ -1,5 +1,5 @@
 app = "synapse-wacker-demo"
-primary_region = "waw"
+primary_region = "fra"
 
 [build]
 
@@ -12,7 +12,7 @@ primary_region = "waw"
 
 [env]
   SYNAPSE_GRAPH_NAME = "wacker"
-  SYNAPSE_FALKORDB_HOST = "synapse-wacker-falkordb.internal"
+  SYNAPSE_FALKORDB_HOST = "synapse-falkordb.internal"
   SYNAPSE_FALKORDB_PORT = "6379"
 
 [[vm]]

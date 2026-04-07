@@ -46,6 +46,9 @@ synapse-web = "synapse.web.app:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"synapse.web" = ["static/**/*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
