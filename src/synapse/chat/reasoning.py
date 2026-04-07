@@ -1006,14 +1006,32 @@ async def reason_full(
                 print(f"Confidence: {assessment.confidence:.2f}  Groundedness: {assessment.groundedness:.2f}")
 
     # Phase 4: Enrichment — extract new knowledge from the answer
-    enrichment = await _enrich_from_answer(
-        answer=answer,
-        question=question,
-        graph=graph,
-        llm=llm,
-        ontology=ontology,
-        store=store,
-    )
+    # Skip enrichment if the answer is not grounded (avoids storing hallucinations)
+    _MIN_GROUNDEDNESS_FOR_ENRICHMENT = 0.3
+    enrichment = None
+    if assessment and assessment.groundedness >= _MIN_GROUNDEDNESS_FOR_ENRICHMENT:
+        enrichment = await _enrich_from_answer(
+            answer=answer,
+            question=question,
+            graph=graph,
+            llm=llm,
+            ontology=ontology,
+            store=store,
+        )
+    elif assessment:
+        logger.info(
+            "Skipping enrichment: groundedness %.2f < %.2f threshold",
+            assessment.groundedness, _MIN_GROUNDEDNESS_FOR_ENRICHMENT,
+        )
+    else:
+        enrichment = await _enrich_from_answer(
+            answer=answer,
+            question=question,
+            graph=graph,
+            llm=llm,
+            ontology=ontology,
+            store=store,
+        )
 
     if verbose and enrichment:
         added = enrichment.entities_added + enrichment.relationships_added
