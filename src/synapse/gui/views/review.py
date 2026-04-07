@@ -301,6 +301,43 @@ class ReviewView(QWidget):
 
     # -- Context panels -------------------------------------------------------
 
+    def _get_enrichment_context(self, entity_name: str) -> list[str]:
+        """Find the chat Q&A that produced an enrichment entity via activity log."""
+        lines = []
+        try:
+            store = self._bridge.get_store()
+            # Find in activity log which chat action added this entity
+            row = store._conn.execute(
+                "SELECT action_label, created_at FROM activity_log "
+                "WHERE action_type = 'chat' AND item_name = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (entity_name,),
+            ).fetchone()
+            if not row:
+                return lines
+
+            action_label = row["action_label"]  # e.g. "Chat: competitors comparison"
+            created_at = row["created_at"]
+
+            # Find the reasoning episode closest in time
+            ep = store._conn.execute(
+                "SELECT question, answer FROM reasoning_episodes "
+                "WHERE (entities_added > 0 OR rels_added > 0) "
+                "AND created_at <= ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (created_at,),
+            ).fetchone()
+            if ep:
+                lines.append(f"<br><b>Chat context</b> ({action_label}):")
+                lines.append(f"<b>Q:</b> {ep['question']}")
+                answer_preview = ep["answer"][:300]
+                if len(ep["answer"]) > 300:
+                    answer_preview += "..."
+                lines.append(f"<b>A:</b> {answer_preview}")
+        except Exception as e:
+            logger.debug("Failed to get enrichment context: %s", e)
+        return lines
+
     @Slot(int, int, int, int)
     def _on_entity_selected(self, row: int, col: int, prev_row: int, prev_col: int) -> None:
         if row < 0:
@@ -323,6 +360,11 @@ class ReviewView(QWidget):
                     if p.get("source_text"):
                         lines.append(f"<br><i>\"{p['source_text']}\"</i>")
                     lines.append(f"Section: {p.get('section_title', '?')} | Doc: {p.get('doc_title', '?')}")
+
+            # Show chat Q&A context for enrichment items
+            source_text = source.text() if source else ""
+            if "enrichment" in source_text:
+                lines.extend(self._get_enrichment_context(name.text()))
 
             # Show neighbors
             neighbors = graph.get_neighbors(name.text(), max_hops=1)
@@ -360,6 +402,11 @@ class ReviewView(QWidget):
             f"<b>{obj.text() if obj else '?'}</b> [{otype.text() if otype else '?'}]",
             f"<br>Source: {source.text() if source else '?'}",
         ]
+
+        # Chat Q&A context for enrichment triples
+        source_text = source.text() if source else ""
+        if "enrichment" in source_text and subj:
+            lines.extend(self._get_enrichment_context(subj.text()))
 
         # Try to get provenance for both subject and object
         try:
