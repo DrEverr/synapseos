@@ -257,6 +257,9 @@ IMPORTANT RULES:
   This is essential because entities are stored via MERGE on their text — if the value is only
   in "properties" dict, multiple subjects sharing the same property name will collapse into
   one node and all values except the first will be lost.
+- CRITICAL for enrichment prompts: the enrichment_user prompt MUST require a "source_text"
+  field in both entities and relationships JSON schemas — the exact sentence from the answer
+  that supports the extraction (copied verbatim). This enables traceability in the review UI.
 
 Return the JSON object with all 10 prompt keys. Return ONLY the JSON, nothing else."""
 
