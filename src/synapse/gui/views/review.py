@@ -1,4 +1,4 @@
-"""Review view — accept or reject unverified AI-generated entities and relationships."""
+"""Review view — accept or reject unverified AI-generated entities, relationships, and new types."""
 
 from __future__ import annotations
 
@@ -11,9 +11,11 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -30,7 +32,7 @@ class ReviewView(QWidget):
         super().__init__(parent)
         self._bridge = bridge
 
-        header = QLabel("Review Unverified Items")
+        header = QLabel("Review")
         header.setFont(QFont("", 24, QFont.Weight.Bold))
 
         self._status_label = QLabel("")
@@ -49,12 +51,16 @@ class ReviewView(QWidget):
         self._tabs = QTabWidget()
         self._tabs.addTab(self._build_entities_tab(), "Entities")
         self._tabs.addTab(self._build_relationships_tab(), "Relationships")
+        self._tabs.addTab(self._build_triples_tab(), "Triples")
+        self._tabs.addTab(self._build_types_tab(), "New Types")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
         layout.addLayout(header_row)
         layout.addWidget(self._tabs, stretch=1)
+
+    # -- Tab builders ---------------------------------------------------------
 
     def _build_entities_tab(self) -> QWidget:
         tab = QWidget()
@@ -75,6 +81,8 @@ class ReviewView(QWidget):
         btn_row.addStretch()
         btn_row.addWidget(accept_all_btn)
 
+        splitter = QSplitter(Qt.Orientation.Vertical)
+
         self._entity_table = QTableWidget(0, 4)
         self._entity_table.setHorizontalHeaderLabels(["Name", "Type", "Confidence", "Source"])
         self._entity_table.horizontalHeader().setStretchLastSection(True)
@@ -83,9 +91,21 @@ class ReviewView(QWidget):
         self._entity_table.setColumnWidth(2, 80)
         self._entity_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._entity_table.setSelectionMode(QTableWidget.SelectionMode.MultiSelection)
+        self._entity_table.currentCellChanged.connect(self._on_entity_selected)
+
+        self._entity_context = QTextBrowser()
+        self._entity_context.setMaximumHeight(150)
+        self._entity_context.setStyleSheet(
+            "font-size: 12px; color: #e4e4ed; background-color: #1a1a22; border: 1px solid #2a2a38; border-radius: 6px; padding: 8px;"
+        )
+        self._entity_context.setPlaceholderText("Select an entity to see its context...")
+
+        splitter.addWidget(self._entity_table)
+        splitter.addWidget(self._entity_context)
+        splitter.setSizes([300, 100])
 
         layout.addLayout(btn_row)
-        layout.addWidget(self._entity_table, stretch=1)
+        layout.addWidget(splitter, stretch=1)
         return tab
 
     def _build_relationships_tab(self) -> QWidget:
@@ -121,6 +141,78 @@ class ReviewView(QWidget):
         layout.addWidget(self._rel_table, stretch=1)
         return tab
 
+    def _build_triples_tab(self) -> QWidget:
+        """New tab: full unverified triples with context."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        btn_row = QHBoxLayout()
+        accept_btn = QPushButton("Accept Selected")
+        accept_btn.clicked.connect(self._accept_triples)
+        reject_btn = QPushButton("Reject Selected")
+        reject_btn.setStyleSheet("QPushButton { background-color: #ef4444; }")
+        reject_btn.clicked.connect(self._reject_triples)
+        btn_row.addWidget(accept_btn)
+        btn_row.addWidget(reject_btn)
+        btn_row.addStretch()
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+
+        self._triple_table = QTableWidget(0, 6)
+        self._triple_table.setHorizontalHeaderLabels([
+            "Subject", "Type", "Predicate", "Object", "Type", "Source"
+        ])
+        self._triple_table.horizontalHeader().setStretchLastSection(True)
+        self._triple_table.setColumnWidth(0, 180)
+        self._triple_table.setColumnWidth(1, 100)
+        self._triple_table.setColumnWidth(2, 140)
+        self._triple_table.setColumnWidth(3, 180)
+        self._triple_table.setColumnWidth(4, 100)
+        self._triple_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._triple_table.setSelectionMode(QTableWidget.SelectionMode.MultiSelection)
+        self._triple_table.currentCellChanged.connect(self._on_triple_selected)
+
+        self._triple_context = QTextBrowser()
+        self._triple_context.setMaximumHeight(150)
+        self._triple_context.setStyleSheet(
+            "font-size: 12px; color: #e4e4ed; background-color: #1a1a22; border: 1px solid #2a2a38; border-radius: 6px; padding: 8px;"
+        )
+        self._triple_context.setPlaceholderText("Select a triple to see its context...")
+
+        splitter.addWidget(self._triple_table)
+        splitter.addWidget(self._triple_context)
+        splitter.setSizes([300, 100])
+
+        layout.addLayout(btn_row)
+        layout.addWidget(splitter, stretch=1)
+        return tab
+
+    def _build_types_tab(self) -> QWidget:
+        """New tab: entity types and relationship types from the latest init/ingest."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # Entity types
+        layout.addWidget(QLabel("Entity Types (current ontology):"))
+        self._etypes_table = QTableWidget(0, 2)
+        self._etypes_table.setHorizontalHeaderLabels(["Type", "Description"])
+        self._etypes_table.horizontalHeader().setStretchLastSection(True)
+        self._etypes_table.setColumnWidth(0, 220)
+
+        layout.addWidget(self._etypes_table, stretch=1)
+
+        # Relationship types
+        layout.addWidget(QLabel("Relationship Types (current ontology):"))
+        self._rtypes_table = QTableWidget(0, 2)
+        self._rtypes_table.setHorizontalHeaderLabels(["Type", "Description"])
+        self._rtypes_table.horizontalHeader().setStretchLastSection(True)
+        self._rtypes_table.setColumnWidth(0, 220)
+
+        layout.addWidget(self._rtypes_table, stretch=1)
+        return tab
+
     # -- Data loading ---------------------------------------------------------
 
     def refresh(self) -> None:
@@ -131,20 +223,24 @@ class ReviewView(QWidget):
             self._status_label.setText("Cannot connect to FalkorDB")
             return
 
+        self._load_entities(graph)
+        self._load_relationships(graph)
+        self._load_triples(graph)
+        self._load_types()
+
+    def _load_entities(self, graph) -> None:
         entities = graph.get_unverified_entities()
-        rels = graph.get_unverified_relationships()
-
-        self._status_label.setText(
-            f"{len(entities)} entities, {len(rels)} relationships pending review"
-        )
-
         self._entity_table.setRowCount(len(entities))
         for i, row in enumerate(entities):
             self._entity_table.setItem(i, 0, QTableWidgetItem("" if row[0] is None else str(row[0])))
             self._entity_table.setItem(i, 1, QTableWidgetItem("" if row[1] is None else str(row[1])))
             self._entity_table.setItem(i, 2, QTableWidgetItem("" if row[2] is None else str(row[2])))
             self._entity_table.setItem(i, 3, QTableWidgetItem("" if row[3] is None else str(row[3])))
+        self._entity_context.clear()
+        self._update_status()
 
+    def _load_relationships(self, graph) -> None:
+        rels = graph.get_unverified_relationships()
         self._rel_table.setRowCount(len(rels))
         for i, row in enumerate(rels):
             self._rel_table.setItem(i, 0, QTableWidgetItem("" if row[0] is None else str(row[0])))
@@ -153,13 +249,142 @@ class ReviewView(QWidget):
             self._rel_table.setItem(i, 3, QTableWidgetItem("" if row[3] is None else str(row[3])))
             self._rel_table.setItem(i, 4, QTableWidgetItem("" if row[4] is None else str(row[4])))
 
+    def _load_triples(self, graph) -> None:
+        """Load unverified triples with full subject/object types."""
+        rows = graph.query(
+            "MATCH (a)-[r]->(b) "
+            "WHERE COALESCE(r.verified, true) = false "
+            "AND NOT a:Document AND NOT a:Section "
+            "AND NOT b:Document AND NOT b:Section "
+            "RETURN a.canonical_name, labels(a)[0], type(r), "
+            "b.canonical_name, labels(b)[0], r.source_doc "
+            "ORDER BY type(r), a.canonical_name"
+        )
+        self._triple_table.setRowCount(len(rows))
+        for i, row in enumerate(rows):
+            for j in range(6):
+                self._triple_table.setItem(i, j, QTableWidgetItem("" if row[j] is None else str(row[j])))
+        self._triple_context.clear()
+
+    def _load_types(self) -> None:
+        """Load entity/relationship types from current ontology."""
+        try:
+            store = self._bridge.get_store()
+            from synapse.config import OntologyRegistry
+            ontology = OntologyRegistry(store=store, ontology_name=self._bridge.settings.ontology)
+
+            etypes = ontology.entity_types
+            self._etypes_table.setRowCount(len(etypes))
+            for i, (name, desc) in enumerate(sorted(etypes.items())):
+                self._etypes_table.setItem(i, 0, QTableWidgetItem(name))
+                item = QTableWidgetItem(desc)
+                item.setToolTip(desc)
+                self._etypes_table.setItem(i, 1, item)
+
+            rtypes = ontology.relationship_types
+            self._rtypes_table.setRowCount(len(rtypes))
+            for i, (name, desc) in enumerate(sorted(rtypes.items())):
+                self._rtypes_table.setItem(i, 0, QTableWidgetItem(name))
+                item = QTableWidgetItem(desc)
+                item.setToolTip(desc)
+                self._rtypes_table.setItem(i, 1, item)
+        except Exception as e:
+            logger.error("Failed to load types: %s", e)
+
+    def _update_status(self) -> None:
+        ent_count = self._entity_table.rowCount()
+        rel_count = self._rel_table.rowCount()
+        triple_count = self._triple_table.rowCount()
+        self._status_label.setText(
+            f"{ent_count} entities, {rel_count} relationships, {triple_count} triples pending"
+        )
+
+    # -- Context panels -------------------------------------------------------
+
+    @Slot(int, int, int, int)
+    def _on_entity_selected(self, row: int, col: int, prev_row: int, prev_col: int) -> None:
+        if row < 0:
+            return
+        name = self._entity_table.item(row, 0)
+        etype = self._entity_table.item(row, 1)
+        source = self._entity_table.item(row, 3)
+        if not name:
+            return
+
+        lines = [f"<b>{name.text()}</b> [{etype.text() if etype else '?'}]"]
+        lines.append(f"Source: {source.text() if source else '?'}")
+
+        # Try to get provenance / source_text from graph
+        try:
+            graph = self._bridge.get_graph()
+            provenance = graph.get_entity_provenance(name.text())
+            if provenance:
+                for p in provenance[:3]:
+                    if p.get("source_text"):
+                        lines.append(f"<br><i>\"{p['source_text']}\"</i>")
+                    lines.append(f"Section: {p.get('section_title', '?')} | Doc: {p.get('doc_title', '?')}")
+
+            # Show neighbors
+            neighbors = graph.get_neighbors(name.text(), max_hops=1)
+            if neighbors:
+                lines.append("<br><b>Connections:</b>")
+                seen = set()
+                for n in neighbors[:8]:
+                    path = n[0] if n[0] else []
+                    rels = n[1] if n[1] else []
+                    key = str(path) + str(rels)
+                    if key not in seen:
+                        seen.add(key)
+                        path_str = " → ".join(str(p) for p in path)
+                        rel_str = ", ".join(str(r) for r in rels)
+                        lines.append(f"  {path_str} ({rel_str})")
+        except Exception:
+            pass
+
+        self._entity_context.setHtml("<br>".join(lines))
+
+    @Slot(int, int, int, int)
+    def _on_triple_selected(self, row: int, col: int, prev_row: int, prev_col: int) -> None:
+        if row < 0:
+            return
+        subj = self._triple_table.item(row, 0)
+        stype = self._triple_table.item(row, 1)
+        pred = self._triple_table.item(row, 2)
+        obj = self._triple_table.item(row, 3)
+        otype = self._triple_table.item(row, 4)
+        source = self._triple_table.item(row, 5)
+
+        lines = [
+            f"<b>{subj.text() if subj else '?'}</b> [{stype.text() if stype else '?'}]",
+            f"  —[{pred.text() if pred else '?'}]→",
+            f"<b>{obj.text() if obj else '?'}</b> [{otype.text() if otype else '?'}]",
+            f"<br>Source: {source.text() if source else '?'}",
+        ]
+
+        # Try to get provenance for both subject and object
+        try:
+            graph = self._bridge.get_graph()
+            for entity_name, label in [(subj, "Subject"), (obj, "Object")]:
+                if not entity_name:
+                    continue
+                prov = graph.get_entity_provenance(entity_name.text())
+                if prov:
+                    p = prov[0]
+                    if p.get("source_text"):
+                        lines.append(f"<br><b>{label}:</b> <i>\"{p['source_text']}\"</i>")
+                    lines.append(f"  Doc: {p.get('doc_title', '?')} / {p.get('section_title', '?')}")
+        except Exception:
+            pass
+
+        self._triple_context.setHtml("<br>".join(lines))
+
     # -- Entity actions -------------------------------------------------------
 
     def _get_graph(self):
         return self._bridge.get_graph()
 
     def _accept_entities(self) -> None:
-        rows = set(idx.row() for idx in self._entity_table.selectedIndexes())
+        rows = sorted({idx.row() for idx in self._entity_table.selectedIndexes()})
         if not rows:
             return
         graph = self._get_graph()
@@ -171,7 +396,7 @@ class ReviewView(QWidget):
         self.refresh()
 
     def _reject_entities(self) -> None:
-        rows = set(idx.row() for idx in self._entity_table.selectedIndexes())
+        rows = sorted({idx.row() for idx in self._entity_table.selectedIndexes()})
         if not rows:
             return
         count = len(rows)
@@ -196,7 +421,7 @@ class ReviewView(QWidget):
     # -- Relationship actions -------------------------------------------------
 
     def _accept_relationships(self) -> None:
-        rows = set(idx.row() for idx in self._rel_table.selectedIndexes())
+        rows = sorted({idx.row() for idx in self._rel_table.selectedIndexes()})
         if not rows:
             return
         graph = self._get_graph()
@@ -209,7 +434,7 @@ class ReviewView(QWidget):
         self.refresh()
 
     def _reject_relationships(self) -> None:
-        rows = set(idx.row() for idx in self._rel_table.selectedIndexes())
+        rows = sorted({idx.row() for idx in self._rel_table.selectedIndexes()})
         if not rows:
             return
         count = len(rows)
@@ -230,4 +455,38 @@ class ReviewView(QWidget):
     def _accept_all_relationships(self) -> None:
         graph = self._get_graph()
         graph.verify_all_relationships()
+        self.refresh()
+
+    # -- Triple actions -------------------------------------------------------
+
+    def _accept_triples(self) -> None:
+        rows = sorted({idx.row() for idx in self._triple_table.selectedIndexes()})
+        if not rows:
+            return
+        graph = self._get_graph()
+        for row in rows:
+            subj = self._triple_table.item(row, 0).text()
+            pred = self._triple_table.item(row, 2).text()
+            obj = self._triple_table.item(row, 3).text()
+            if subj and pred and obj:
+                graph.verify_relationship(subj, pred, obj)
+        self.refresh()
+
+    def _reject_triples(self) -> None:
+        rows = sorted({idx.row() for idx in self._triple_table.selectedIndexes()})
+        if not rows:
+            return
+        count = len(rows)
+        if QMessageBox.question(
+            self, "Confirm Reject",
+            f"Delete {count} unverified triple(s)?",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        graph = self._get_graph()
+        for row in rows:
+            subj = self._triple_table.item(row, 0).text()
+            pred = self._triple_table.item(row, 2).text()
+            obj = self._triple_table.item(row, 3).text()
+            if subj and pred and obj:
+                graph.delete_relationship(subj, pred, obj)
         self.refresh()
