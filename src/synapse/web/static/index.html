@@ -213,41 +213,73 @@
         <div class="flex-1 overflow-y-auto p-8">
             <div class="flex items-center justify-between mb-6">
                 <h1 class="text-2xl font-bold">Review</h1>
-                <button @click="verifyAll()" class="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-medium hover:bg-emerald-600 transition">
-                    Accept All
-                </button>
+                <div class="flex gap-3">
+                    <span class="text-gray-400 text-sm self-center" x-text="unverifiedEntities.length + ' entities, ' + unverifiedRels.length + ' relationships pending'"></span>
+                    <button @click="verifyAll()" class="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm font-medium hover:bg-emerald-600 transition">
+                        Accept All
+                    </button>
+                </div>
             </div>
 
-            <!-- Entities -->
-            <div class="bg-white rounded-xl border border-gray-200 mb-6">
-                <div class="px-6 py-4 border-b border-gray-100 font-semibold">
-                    Unverified Entities <span class="text-gray-400 font-normal" x-text="'(' + unverifiedEntities.length + ')'"></span>
-                </div>
-                <template x-if="unverifiedEntities.length === 0">
-                    <div class="px-6 py-6 text-center text-gray-400 text-sm">All entities verified</div>
-                </template>
-                <div class="divide-y divide-gray-50">
-                    <template x-for="e in unverifiedEntities" :key="e.canonical_name">
-                        <div class="px-6 py-3 flex items-center justify-between">
-                            <div class="flex-1 min-w-0">
-                                <span class="font-medium text-sm" x-text="e.canonical_name"></span>
-                                <span class="badge bg-indigo-100 text-indigo-700 ml-2" x-text="e.entity_type"></span>
-                                <span class="text-xs text-gray-400 ml-2" x-text="'conf: ' + (e.confidence||0).toFixed(2)"></span>
+            <!-- Sub-tabs -->
+            <div class="flex gap-1 mb-4 border-b border-gray-200">
+                <button @click="reviewTab='entities'" :class="reviewTab==='entities' ? 'border-b-2 border-accent text-accent' : 'text-gray-500'" class="px-4 py-2 text-sm font-medium transition">Entities</button>
+                <button @click="reviewTab='relationships'" :class="reviewTab==='relationships' ? 'border-b-2 border-accent text-accent' : 'text-gray-500'" class="px-4 py-2 text-sm font-medium transition">Relationships</button>
+                <button @click="reviewTab='triples'; loadTriples()" :class="reviewTab==='triples' ? 'border-b-2 border-accent text-accent' : 'text-gray-500'" class="px-4 py-2 text-sm font-medium transition">Triples</button>
+                <button @click="reviewTab='types'; loadOntology()" :class="reviewTab==='types' ? 'border-b-2 border-accent text-accent' : 'text-gray-500'" class="px-4 py-2 text-sm font-medium transition">Ontology</button>
+            </div>
+
+            <!-- Entities sub-tab -->
+            <template x-if="reviewTab === 'entities'">
+            <div>
+                <div class="bg-white rounded-xl border border-gray-200 mb-4">
+                    <template x-if="unverifiedEntities.length === 0">
+                        <div class="px-6 py-6 text-center text-gray-400 text-sm">All entities verified</div>
+                    </template>
+                    <div class="divide-y divide-gray-50">
+                        <template x-for="e in unverifiedEntities" :key="e.canonical_name">
+                            <div class="px-6 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50" @click="showEntityContext(e.canonical_name)">
+                                <div class="flex-1 min-w-0">
+                                    <span class="font-medium text-sm" x-text="e.canonical_name"></span>
+                                    <span class="badge bg-indigo-100 text-indigo-700 ml-2" x-text="e.entity_type"></span>
+                                    <span class="text-xs text-gray-400 ml-2" x-text="'conf: ' + (e.confidence||0).toFixed(2)"></span>
+                                </div>
+                                <div class="flex gap-2 ml-4 shrink-0">
+                                    <button @click.stop="verifyEntity(e)" class="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-xs font-medium hover:bg-emerald-200">Accept</button>
+                                    <button @click.stop="rejectEntity(e)" class="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-xs font-medium hover:bg-red-200">Reject</button>
+                                </div>
                             </div>
-                            <div class="flex gap-2 ml-4 shrink-0">
-                                <button @click="verifyEntity(e)" class="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-xs font-medium hover:bg-emerald-200">Accept</button>
-                                <button @click="rejectEntity(e)" class="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-xs font-medium hover:bg-red-200">Reject</button>
+                        </template>
+                    </div>
+                </div>
+                <!-- Context panel -->
+                <template x-if="entityContext">
+                <div class="bg-white rounded-xl border border-gray-200 p-5">
+                    <h3 class="font-semibold mb-3">Context</h3>
+                    <template x-if="entityContext.source_text">
+                        <div class="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm">
+                            <span class="font-medium text-amber-700">Extracted from:</span>
+                            <span class="italic" x-text="'\"' + entityContext.source_text + '\"'"></span>
+                        </div>
+                    </template>
+                    <template x-if="entityContext.question">
+                        <div class="space-y-2 text-sm">
+                            <div><span class="font-medium text-gray-500">Chat:</span> <span class="text-gray-400" x-text="entityContext.label"></span></div>
+                            <div><span class="font-medium">Q:</span> <span x-text="entityContext.question"></span></div>
+                            <div class="max-h-40 overflow-y-auto p-3 bg-gray-50 rounded-lg">
+                                <span class="font-medium">A:</span>
+                                <div x-html="renderMarkdown(entityContext.answer)"></div>
                             </div>
                         </div>
                     </template>
                 </div>
+                </template>
             </div>
+            </template>
 
-            <!-- Relationships -->
+            <!-- Relationships sub-tab -->
+            <template x-if="reviewTab === 'relationships'">
             <div class="bg-white rounded-xl border border-gray-200">
-                <div class="px-6 py-4 border-b border-gray-100 font-semibold">
-                    Unverified Relationships <span class="text-gray-400 font-normal" x-text="'(' + unverifiedRels.length + ')'"></span>
-                </div>
                 <template x-if="unverifiedRels.length === 0">
                     <div class="px-6 py-6 text-center text-gray-400 text-sm">All relationships verified</div>
                 </template>
@@ -268,6 +300,58 @@
                     </template>
                 </div>
             </div>
+            </template>
+
+            <!-- Triples sub-tab -->
+            <template x-if="reviewTab === 'triples'">
+            <div class="bg-white rounded-xl border border-gray-200">
+                <template x-if="unverifiedTriples.length === 0">
+                    <div class="px-6 py-6 text-center text-gray-400 text-sm">No unverified triples</div>
+                </template>
+                <div class="divide-y divide-gray-50">
+                    <template x-for="t in unverifiedTriples" :key="t.subject + t.predicate + t.object">
+                        <div class="px-6 py-3 cursor-pointer hover:bg-gray-50" @click="showEntityContext(t.subject)">
+                            <div class="text-sm">
+                                <span class="font-medium" x-text="t.subject"></span>
+                                <span class="badge bg-gray-100 text-gray-500 ml-1" x-text="t.subject_type"></span>
+                                <span class="text-accent mx-2" x-text="t.predicate"></span>
+                                <span class="font-medium" x-text="t.object"></span>
+                                <span class="badge bg-gray-100 text-gray-500 ml-1" x-text="t.object_type"></span>
+                                <span class="text-xs text-gray-400 ml-3" x-text="t.source_doc"></span>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+            </template>
+
+            <!-- Ontology sub-tab -->
+            <template x-if="reviewTab === 'types'">
+            <div class="grid grid-cols-2 gap-6">
+                <div class="bg-white rounded-xl border border-gray-200 p-5">
+                    <h3 class="font-semibold mb-3">Entity Types <span class="text-gray-400 font-normal" x-text="'(' + Object.keys(reviewOntology?.entity_types || {}).length + ')'"></span></h3>
+                    <div class="space-y-1 max-h-96 overflow-y-auto">
+                        <template x-for="[type, desc] in Object.entries(reviewOntology?.entity_types || {})" :key="type">
+                            <div class="text-xs px-2 py-1.5 rounded hover:bg-gray-50">
+                                <span class="font-semibold text-accent" x-text="type"></span>
+                                <span class="text-gray-400 ml-1" x-text="desc"></span>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+                <div class="bg-white rounded-xl border border-gray-200 p-5">
+                    <h3 class="font-semibold mb-3">Relationship Types <span class="text-gray-400 font-normal" x-text="'(' + Object.keys(reviewOntology?.relationship_types || {}).length + ')'"></span></h3>
+                    <div class="space-y-1 max-h-96 overflow-y-auto">
+                        <template x-for="[type, desc] in Object.entries(reviewOntology?.relationship_types || {})" :key="type">
+                            <div class="text-xs px-2 py-1.5 rounded hover:bg-gray-50">
+                                <span class="font-semibold text-accent" x-text="type"></span>
+                                <span class="text-gray-400 ml-1" x-text="desc"></span>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+            </template>
         </div>
         </template>
 

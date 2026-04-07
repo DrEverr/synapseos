@@ -92,8 +92,12 @@ function mainApp() {
         uploading: false,
         uploadStatus: '',
         // Review state
+        reviewTab: 'entities',
         unverifiedEntities: [],
         unverifiedRels: [],
+        unverifiedTriples: [],
+        entityContext: null,
+        reviewOntology: null,
 
         async init() {
             await this.loadSessions();
@@ -282,6 +286,19 @@ function mainApp() {
         async loadReview() {
             this.unverifiedEntities = await api('/api/review/entities') || [];
             this.unverifiedRels = await api('/api/review/relationships') || [];
+            this.entityContext = null;
+        },
+
+        async loadTriples() {
+            this.unverifiedTriples = await api('/api/review/triples') || [];
+        },
+
+        async loadOntology() {
+            this.reviewOntology = await api('/api/review/ontology');
+        },
+
+        async showEntityContext(name) {
+            this.entityContext = await api(`/api/review/entity/${encodeURIComponent(name)}/context`);
         },
 
         async verifyEntity(e) {
