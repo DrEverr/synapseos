@@ -92,6 +92,7 @@ class ReviewView(QWidget):
         self._entity_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._entity_table.setSelectionMode(QTableWidget.SelectionMode.MultiSelection)
         self._entity_table.currentCellChanged.connect(self._on_entity_selected)
+        self._entity_table.doubleClicked.connect(lambda idx: self._show_full_context("entity", idx.row()))
 
         self._entity_context = QTextBrowser()
         self._entity_context.setMaximumHeight(150)
@@ -172,6 +173,7 @@ class ReviewView(QWidget):
         self._triple_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._triple_table.setSelectionMode(QTableWidget.SelectionMode.MultiSelection)
         self._triple_table.currentCellChanged.connect(self._on_triple_selected)
+        self._triple_table.doubleClicked.connect(lambda idx: self._show_full_context("triple", idx.row()))
 
         self._triple_context = QTextBrowser()
         self._triple_context.setMaximumHeight(150)
@@ -300,6 +302,79 @@ class ReviewView(QWidget):
         )
 
     # -- Context panels -------------------------------------------------------
+
+    def _get_enrichment_episode(self, entity_name: str) -> dict | None:
+        """Return the full reasoning episode that produced an enrichment entity."""
+        try:
+            store = self._bridge.get_store()
+            row = store._conn.execute(
+                "SELECT action_label, created_at FROM activity_log "
+                "WHERE action_type = 'chat' AND item_name = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (entity_name,),
+            ).fetchone()
+            if not row:
+                return None
+            ep = store._conn.execute(
+                "SELECT question, answer FROM reasoning_episodes "
+                "WHERE (entities_added > 0 OR rels_added > 0) "
+                "AND created_at <= ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (row["created_at"],),
+            ).fetchone()
+            if ep:
+                return {"label": row["action_label"], "question": ep["question"], "answer": ep["answer"]}
+        except Exception:
+            pass
+        return None
+
+    def _show_full_context(self, table_type: str, row: int) -> None:
+        """Open a dialog with full untruncated context for the selected item."""
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox
+        from synapse.gui.widgets.chat_bubble import markdown_to_html
+
+        if table_type == "entity":
+            table = self._entity_table
+            name = table.item(row, 0).text() if table.item(row, 0) else ""
+            etype = table.item(row, 1).text() if table.item(row, 1) else ""
+            title = f"{name} [{etype}]"
+        else:
+            table = self._triple_table
+            subj = table.item(row, 0).text() if table.item(row, 0) else ""
+            pred = table.item(row, 2).text() if table.item(row, 2) else ""
+            obj = table.item(row, 3).text() if table.item(row, 3) else ""
+            name = subj
+            title = f"{subj} -[{pred}]-> {obj}"
+
+        if not name:
+            return
+
+        ep = self._get_enrichment_episode(name)
+        if not ep:
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Context — {title}")
+        dialog.setMinimumSize(700, 500)
+
+        content = QTextBrowser()
+        content.setOpenExternalLinks(True)
+        content.setStyleSheet(
+            "padding: 12px; font-size: 13px; color: #e4e4ed; "
+            "background-color: #1a1a22; border: none;"
+        )
+        md = f"## {title}\n\n**Source:** {ep['label']}\n\n---\n\n"
+        md += f"**Question:**\n\n{ep['question']}\n\n---\n\n"
+        md += f"**Answer:**\n\n{ep['answer']}"
+        content.setHtml(markdown_to_html(md))
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.close)
+
+        dlg_layout = QVBoxLayout(dialog)
+        dlg_layout.addWidget(content, stretch=1)
+        dlg_layout.addWidget(buttons)
+        dialog.exec()
 
     def _get_enrichment_context(self, entity_name: str) -> list[str]:
         """Find the chat Q&A that produced an enrichment entity via activity log."""
