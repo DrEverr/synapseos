@@ -179,10 +179,11 @@ ENTITIES ALREADY IN THE GRAPH (do NOT re-extract these):
 
 RULES:
 1. Extract ONLY new entities and relationships NOT already in the graph.
-2. Each entity must have: "text", "entity_type", "confidence"
-3. Each relationship must have: "subject", "subject_type", "predicate", "object", "object_type", "confidence"
-4. Only extract factual knowledge — skip opinions, hedging, or meta-commentary.
-5. Assign lower confidence (0.6-0.8) to AI-inferred facts vs. sourced facts (0.9-1.0).
+2. Each entity must have: "text", "entity_type", "confidence", "source_text"
+3. Each relationship must have: "subject", "subject_type", "predicate", "object", "object_type", "confidence", "source_text"
+4. "source_text" = the exact sentence or phrase from the ANSWER TEXT that supports this extraction (copy verbatim).
+5. Only extract factual knowledge — skip opinions, hedging, or meta-commentary.
+6. Assign lower confidence (0.6-0.8) to AI-inferred facts vs. sourced facts (0.9-1.0).
 
 Return a JSON object with:
 - "entities": [...] — array of new entities
