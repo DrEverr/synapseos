@@ -590,6 +590,11 @@ class ChatView(QWidget):
         if result.assessment:
             metadata["confidence"] = result.assessment.confidence
             metadata["groundedness"] = result.assessment.groundedness
+            metadata["completeness"] = result.assessment.completeness
+            if result.assessment.reasoning:
+                metadata["assessment"] = result.assessment.reasoning
+            if result.assessment.gaps:
+                metadata["gaps"] = result.assessment.gaps
         if result.debate_rounds:
             metadata["debate_rounds"] = result.debate_rounds
         if result.challenge:

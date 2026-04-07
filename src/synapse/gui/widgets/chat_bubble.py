@@ -296,6 +296,8 @@ class ChatBubble(QWidget):
                 parts.append(f"Confidence {metadata['confidence']:.0%}")
             if "groundedness" in metadata:
                 parts.append(f"Grounded {metadata['groundedness']:.0%}")
+            if "completeness" in metadata:
+                parts.append(f"Complete {metadata['completeness']:.0%}")
             if "debate_rounds" in metadata:
                 parts.append(f"Debate: {metadata['debate_rounds']} rounds")
             if "challenge" in metadata:
@@ -310,6 +312,24 @@ class ChatBubble(QWidget):
                     "color: #55556a; font-size: 11px; padding: 2px 18px;"
                 )
 
+        # Assessment detail (collapsible)
+        assessment_widget = None
+        if metadata and not is_user and metadata.get("assessment"):
+            assessment_lines = []
+            assessment_lines.append(f"<b>Assessment:</b> {metadata['assessment']}")
+            gaps = metadata.get("gaps", [])
+            if gaps:
+                assessment_lines.append("<b>Gaps:</b>")
+                for gap in gaps:
+                    assessment_lines.append(f"  - {gap}")
+            assessment_widget = QLabel("<br>".join(assessment_lines))
+            assessment_widget.setWordWrap(True)
+            assessment_widget.setTextFormat(Qt.TextFormat.RichText)
+            assessment_widget.setStyleSheet(
+                "color: #8e8ea0; font-size: 11px; padding: 4px 18px; "
+                "border-top: 1px solid #2a2a38; margin-top: 4px;"
+            )
+
         # Layout — full width, user gets right-aligned text color accent
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 4, 0, 4)
@@ -317,6 +337,8 @@ class ChatBubble(QWidget):
         layout.addWidget(widget)
         if meta_label:
             layout.addWidget(meta_label)
+        if assessment_widget:
+            layout.addWidget(assessment_widget)
 
     def _update_content(self, text: str) -> None:
         """Update the bubble content (used for live reasoning steps)."""
