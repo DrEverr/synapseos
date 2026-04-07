@@ -246,6 +246,8 @@ class ChatBubble(QWidget):
     ) -> None:
         super().__init__(parent)
         self._is_user = is_user
+        self._raw_text = text
+        self._content_widget = None
 
         if is_user:
             # Simple label for user messages — right-aligned, subtle bg
@@ -284,6 +286,7 @@ class ChatBubble(QWidget):
                 }
             """)
             widget.setText(html_content)
+            self._content_widget = widget
 
         # Metadata badges (confidence, steps, elapsed)
         meta_label = None
@@ -314,3 +317,9 @@ class ChatBubble(QWidget):
         layout.addWidget(widget)
         if meta_label:
             layout.addWidget(meta_label)
+
+    def _update_content(self, text: str) -> None:
+        """Update the bubble content (used for live reasoning steps)."""
+        self._raw_text = text
+        if self._content_widget is not None:
+            self._content_widget.setText(markdown_to_html(text))

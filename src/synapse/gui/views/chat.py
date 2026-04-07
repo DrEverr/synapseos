@@ -472,6 +472,10 @@ class ChatView(QWidget):
                     timeout=settings.llm_timeout,
                 )
 
+            def on_step(step_num: int, phase: str, content: str) -> None:
+                preview = content.split("\n\n")[0].strip() if content else ""
+                worker.signals.step.emit(step_num, phase, preview)
+
             try:
                 return await reason_full(
                     question=question,
@@ -494,6 +498,7 @@ class ChatView(QWidget):
                     debate_max_rounds=settings.debate_max_rounds,
                     debate_confidence_threshold=settings.debate_confidence_threshold,
                     challenger_llm=challenger_llm,
+                    on_step=on_step,
                 )
             finally:
                 await llm.close()
@@ -504,6 +509,8 @@ class ChatView(QWidget):
         worker = AsyncWorker(make_coro)
         self._worker = worker
         self._active_workers.add(worker)
+        self._thinking_bubble = None
+        worker.signals.step.connect(self._on_reasoning_step)
         worker.signals.finished.connect(
             lambda result, w=worker: self._on_answer(question, result, w)
         )
@@ -530,6 +537,38 @@ class ChatView(QWidget):
         """Pick a new random thinking quote."""
         self._thinking_label.setText(random.choice(THINKING_QUOTES))
 
+    @Slot(int, str, str)
+    def _on_reasoning_step(self, step_num: int, phase: str, content: str) -> None:
+        """Show a temporary bubble with live reasoning steps."""
+        step_text = f"**Step {step_num}** · {phase}\n\n{content}" if content else f"**Step {step_num}** · {phase}"
+
+        if self._thinking_bubble is None:
+            # Create the temporary reasoning bubble
+            self._thinking_bubble = ChatBubble(step_text, is_user=False)
+            self._thinking_bubble.setStyleSheet(
+                "background: transparent; border-left: 3px solid #7c5cfc; padding-left: 8px; opacity: 0.8;"
+            )
+            count = self._messages_layout.count()
+            self._messages_layout.insertWidget(count - 1, self._thinking_bubble)
+        else:
+            # Append new step to existing bubble
+            current = self._thinking_bubble._raw_text if hasattr(self._thinking_bubble, '_raw_text') else ""
+            updated = current + "\n\n" + step_text
+            self._thinking_bubble._update_content(updated)
+
+        # Scroll to bottom
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._scroll.verticalScrollBar().setValue(
+            self._scroll.verticalScrollBar().maximum()
+        ))
+
+    def _remove_thinking_bubble(self) -> None:
+        """Remove the temporary reasoning bubble."""
+        if self._thinking_bubble is not None:
+            self._thinking_bubble.setParent(None)
+            self._thinking_bubble.deleteLater()
+            self._thinking_bubble = None
+
     def _retire_worker(self, worker: AsyncWorker) -> None:
         """Remove a finished worker from the active set."""
         self._active_workers.discard(worker)
@@ -539,6 +578,7 @@ class ChatView(QWidget):
     @Slot()
     def _on_answer(self, question: str, result, worker: AsyncWorker) -> None:
         self._stop_thinking()
+        self._remove_thinking_bubble()
         self._send_btn.setEnabled(True)
         self._retire_worker(worker)
 
@@ -576,6 +616,7 @@ class ChatView(QWidget):
     @Slot(str)
     def _on_error(self, traceback_str: str, worker: AsyncWorker) -> None:
         self._stop_thinking()
+        self._remove_thinking_bubble()
         self._send_btn.setEnabled(True)
         self._retire_worker(worker)
         logger.error("Chat error:\n%s", traceback_str)

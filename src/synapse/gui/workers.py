@@ -26,6 +26,7 @@ class _WorkerSignals(QObject):
     """Signals emitted by AsyncWorker."""
 
     progress = Signal(str, float)  # (message, 0.0-1.0 fraction)
+    step = Signal(int, str, str)   # (step_number, phase, content_preview)
     log_record = Signal(str, str)  # (level_name, formatted_message)
     finished = Signal(object)      # result (any picklable object)
     error = Signal(str)            # traceback string
