@@ -125,6 +125,7 @@ async def enrich_graph_from_answer(
             confidence=confidence,
             source_doc="chat:enrichment",
             properties=raw.get("properties", {}),
+            source_text=raw.get("source_text", ""),
             verified=False,
         )
         entity_map[text] = entity
@@ -176,13 +177,13 @@ async def enrich_graph_from_answer(
     if store and (entities_added > 0 or rels_added > 0):
         items: list[tuple[str, str, str]] = []
         for text, entity in entity_map.items():
-            items.append(("entity", entity.canonical_name, entity.entity_type))
+            items.append(("entity", entity.canonical_name, entity.source_text or entity.entity_type))
         for raw in raw_relationships:
             s = raw.get("subject", "")
             p = raw.get("predicate", "")
             o = raw.get("object", "")
             if s and p and o:
-                items.append(("relationship", f"{s} → {p} → {o}", ""))
+                items.append(("relationship", f"{s} → {p} → {o}", raw.get("source_text", "")))
         if items:
             store.log_activity_batch("chat", "enrichment", f"Chat: {question[:40]}", items)
 

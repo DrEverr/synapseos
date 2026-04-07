@@ -353,6 +353,37 @@ class ReviewView(QWidget):
         if not ep:
             return
 
+        # Get source_text from graph node or activity log
+        source_quote = ""
+        try:
+            graph = self._bridge.get_graph()
+            rows = graph.query(
+                "MATCH (n) WHERE n.canonical_name = $name AND n.source_text IS NOT NULL "
+                "RETURN n.source_text LIMIT 1",
+                params={"name": name},
+            )
+            if rows and rows[0][0]:
+                source_quote = rows[0][0]
+            if not source_quote:
+                store = self._bridge.get_store()
+                row = store._conn.execute(
+                    "SELECT item_detail FROM activity_log "
+                    "WHERE action_type = 'chat' AND item_name = ? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (name,),
+                ).fetchone()
+                if row and row["item_detail"] and len(row["item_detail"]) > 20:
+                    source_quote = row["item_detail"]
+        except Exception:
+            pass
+
+        # Highlight source_quote in the answer
+        answer_html = ep["answer"]
+        if source_quote and source_quote in answer_html:
+            answer_html = answer_html.replace(
+                source_quote, f"**>>>{source_quote}<<<**"
+            )
+
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Context — {title}")
         dialog.setMinimumSize(700, 500)
@@ -363,9 +394,11 @@ class ReviewView(QWidget):
             "padding: 12px; font-size: 13px; color: #e4e4ed; "
             "background-color: #1a1a22; border: none;"
         )
-        md = f"## {title}\n\n**Source:** {ep['label']}\n\n---\n\n"
-        md += f"**Question:**\n\n{ep['question']}\n\n---\n\n"
-        md += f"**Answer:**\n\n{ep['answer']}"
+        md = f"## {title}\n\n**Source:** {ep['label']}\n\n"
+        if source_quote:
+            md += f"**Extracted from:** \"{source_quote}\"\n\n"
+        md += f"---\n\n**Question:**\n\n{ep['question']}\n\n---\n\n"
+        md += f"**Answer:**\n\n{answer_html}"
         content.setHtml(markdown_to_html(md))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -402,8 +435,21 @@ class ReviewView(QWidget):
                 "ORDER BY created_at DESC LIMIT 1",
                 (created_at,),
             ).fetchone()
+            # Get source_text (the exact quote from the answer)
+            source_quote = ""
+            detail_row = store._conn.execute(
+                "SELECT item_detail FROM activity_log "
+                "WHERE action_type = 'chat' AND item_name = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (entity_name,),
+            ).fetchone()
+            if detail_row and detail_row["item_detail"] and len(detail_row["item_detail"]) > 20:
+                source_quote = detail_row["item_detail"]
+
             if ep:
                 lines.append(f"<br><b>Chat context</b> ({action_label}):")
+                if source_quote:
+                    lines.append(f"<b>Extracted from:</b> <i>\"{source_quote}\"</i>")
                 lines.append(f"<b>Q:</b> {ep['question']}")
                 answer_preview = ep["answer"][:300]
                 if len(ep["answer"]) > 300:
