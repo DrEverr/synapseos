@@ -3,4 +3,4 @@
 Fresh instance → bootstrap (discover ontology + generate prompts) → extract KG → chat → grow.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

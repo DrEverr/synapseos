@@ -22,7 +22,7 @@ def create_app() -> FastAPI:
     """FastAPI application factory."""
     app = FastAPI(
         title="SynapseOS Wacker Demo",
-        version="0.3.0",
+        version="0.4.0",
         docs_url="/docs",
     )
 
