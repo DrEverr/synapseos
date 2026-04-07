@@ -117,11 +117,41 @@ def _parse_action(text: str) -> tuple[str, str, bool] | None:
     """Parse the first action from the LLM response."""
     text, was_multi = _truncate_to_first_action(text)
 
-    # Standard format: Action: TOOL(args) — for single-line tools
+    # Standard format: Action: TOOL(args) — single-line
     match = re.search(
         r"Action:\s*(GRAPH_QUERY|SECTION_TEXT)\s*\((.+)\)\s*$",
         text,
         re.MULTILINE,
+    )
+    if match:
+        tool = match.group(1)
+        args = match.group(2).strip()
+        return tool, args, was_multi
+
+    # Multi-line with backticks: Action: TOOL(`\n...\n`)
+    match = re.search(
+        r"Action:\s*(GRAPH_QUERY|SECTION_TEXT)\s*\(\s*`([\s\S]*?)`\s*\)",
+        text,
+    )
+    if match:
+        tool = match.group(1)
+        args = match.group(2).strip()
+        return tool, args, was_multi
+
+    # Multi-line with triple backticks: Action: TOOL(```cypher\n...\n```)
+    match = re.search(
+        r"Action:\s*(GRAPH_QUERY|SECTION_TEXT)\s*\(\s*```\w*\n([\s\S]*?)```\s*\)",
+        text,
+    )
+    if match:
+        tool = match.group(1)
+        args = match.group(2).strip()
+        return tool, args, was_multi
+
+    # Multi-line with quotes: Action: TOOL("\n...\n")
+    match = re.search(
+        r'Action:\s*(GRAPH_QUERY|SECTION_TEXT)\s*\(\s*"([\s\S]*?)"\s*\)',
+        text,
     )
     if match:
         tool = match.group(1)
