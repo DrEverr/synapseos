@@ -93,7 +93,7 @@ class TestBuildEvidenceSummary:
             },
         ]
         result = _build_evidence_summary(log)
-        assert "[Graph]" in result
+        assert "[GRAPH_QUERY]" in result
         assert "einstein" in result
 
     def test_empty_results_excluded(self):
@@ -136,7 +136,7 @@ class TestBuildEvidenceSummary:
             {"tool": "ANSWER", "args": "", "observation": ""},
         ]
         result = _build_evidence_summary(log)
-        assert "[Graph]" in result
+        assert "[GRAPH_QUERY]" in result
         assert "[Section]" in result
         assert "data found" in result
 
@@ -148,4 +148,4 @@ class TestBuildEvidenceSummary:
         ]
         result = _build_evidence_summary(log)
         # Count [Graph] entries
-        assert result.count("[Graph]") <= 10
+        assert result.count("[GRAPH_QUERY]") <= 10

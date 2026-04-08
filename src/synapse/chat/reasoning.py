@@ -117,9 +117,12 @@ def _parse_action(text: str) -> tuple[str, str, bool] | None:
     """Parse the first action from the LLM response."""
     text, was_multi = _truncate_to_first_action(text)
 
+    # All known tool names
+    _ALL_TOOLS = r"FIND|DETAILS|RELATED|COMPARE|LIST|SCHEMA|GRAPH_QUERY|SECTION_TEXT"
+
     # Standard format: Action: TOOL(args) — single-line
     match = re.search(
-        r"Action:\s*(GRAPH_QUERY|SECTION_TEXT)\s*\((.+)\)\s*$",
+        rf"Action:\s*({_ALL_TOOLS})\s*\((.+)\)\s*$",
         text,
         re.MULTILINE,
     )
@@ -128,9 +131,18 @@ def _parse_action(text: str) -> tuple[str, str, bool] | None:
         args = match.group(2).strip()
         return tool, args, was_multi
 
+    # No-args tools: Action: SCHEMA()
+    match = re.search(
+        rf"Action:\s*({_ALL_TOOLS})\s*\(\s*\)\s*$",
+        text,
+        re.MULTILINE,
+    )
+    if match:
+        return match.group(1), "", was_multi
+
     # Multi-line with backticks: Action: TOOL(`\n...\n`)
     match = re.search(
-        r"Action:\s*(GRAPH_QUERY|SECTION_TEXT)\s*\(\s*`([\s\S]*?)`\s*\)",
+        rf"Action:\s*({_ALL_TOOLS})\s*\(\s*`([\s\S]*?)`\s*\)",
         text,
     )
     if match:
@@ -140,7 +152,7 @@ def _parse_action(text: str) -> tuple[str, str, bool] | None:
 
     # Multi-line with triple backticks: Action: TOOL(```cypher\n...\n```)
     match = re.search(
-        r"Action:\s*(GRAPH_QUERY|SECTION_TEXT)\s*\(\s*```\w*\n([\s\S]*?)```\s*\)",
+        rf"Action:\s*({_ALL_TOOLS})\s*\(\s*```\w*\n([\s\S]*?)```\s*\)",
         text,
     )
     if match:
@@ -150,7 +162,7 @@ def _parse_action(text: str) -> tuple[str, str, bool] | None:
 
     # Multi-line with quotes: Action: TOOL("\n...\n")
     match = re.search(
-        r'Action:\s*(GRAPH_QUERY|SECTION_TEXT)\s*\(\s*"([\s\S]*?)"\s*\)',
+        rf'Action:\s*({_ALL_TOOLS})\s*\(\s*"([\s\S]*?)"\s*\)',
         text,
     )
     if match:
@@ -487,14 +499,14 @@ def _build_conversation_context(
 
 def _build_evidence_summary(actions_log: list[dict[str, str]]) -> str:
     """Build a concise summary of evidence gathered during reasoning for self-assessment."""
+    _EVIDENCE_TOOLS = {"GRAPH_QUERY", "FIND", "DETAILS", "RELATED", "COMPARE", "LIST", "SCHEMA"}
     evidence_parts: list[str] = []
     for entry in actions_log:
         tool = entry.get("tool", "")
         observation = entry.get("observation", "")
-        if tool == "GRAPH_QUERY" and observation and "(no results)" not in observation:
-            # Truncate long query results
+        if tool in _EVIDENCE_TOOLS and observation and "no " not in observation[:20].lower() and "error" not in observation[:20].lower():
             obs_truncated = observation[:500] + "..." if len(observation) > 500 else observation
-            evidence_parts.append(f"[Graph] {obs_truncated}")
+            evidence_parts.append(f"[{tool}] {obs_truncated}")
         elif tool == "SECTION_TEXT" and observation:
             obs_truncated = observation[:300] + "..." if len(observation) > 300 else observation
             evidence_parts.append(f"[Section] {obs_truncated}")
@@ -820,8 +832,12 @@ async def reason_full(
                     "role": "user",
                     "content": "You did NOT provide an action. Every response MUST end with "
                     "exactly one of:\n"
-                    "Action: GRAPH_QUERY(MATCH ...)\n"
-                    "Action: SECTION_TEXT(section_id)\n"
+                    "Action: FIND(name)\n"
+                    "Action: DETAILS(name)\n"
+                    "Action: RELATED(name, REL_TYPE)\n"
+                    "Action: COMPARE(name1, name2)\n"
+                    "Action: LIST(TYPE)\n"
+                    "Action: SCHEMA()\n"
                     "Action: ANSWER(your answer)\n"
                     "Do it now.",
                 }
@@ -842,7 +858,24 @@ async def reason_full(
         if had_multi:
             multi_warning = "\n\n(NOTE: Multiple actions detected. Only the first was executed.)"
 
-        if tool == "GRAPH_QUERY":
+        if tool in ("FIND", "DETAILS", "RELATED", "COMPARE", "LIST", "SCHEMA"):
+            from synapse.tools.graph_tools import execute_tool
+            result_text = execute_tool(tool, args, graph)
+            if "no " in result_text.lower()[:20] or "not found" in result_text.lower():
+                empty_result_count += 1
+                total_empty_results += 1
+            else:
+                empty_result_count = 0
+
+            actions_log.append({"tool": tool, "args": args, "observation": result_text})
+            if stream or verbose:
+                print(f"  → {result_text[:200]}")
+            messages.append(
+                {"role": "user", "content": f"Result:\n{result_text}{multi_warning}"}
+            )
+
+        elif tool == "GRAPH_QUERY":
+            # Legacy fallback — still supported for old prompts
             try:
                 sanitized = _sanitize_cypher(args)
                 result = graph.query(sanitized)
@@ -930,9 +963,14 @@ async def reason_full(
         if assessment.gaps:
             print(f"Gaps: {', '.join(assessment.gaps)}")
 
-    # Phase 3B: Debate — challenger reviews the answer (optional)
+    # Phase 3B: Debate — auto-trigger when confidence < 51%, or when explicitly requested
+    _AUTO_DEBATE_THRESHOLD = 0.51
     challenge = None
     debate_rounds = 0
+
+    if not debate and assessment and assessment.confidence < _AUTO_DEBATE_THRESHOLD:
+        debate = True
+        logger.info("Auto-debate triggered: confidence %.2f < %.2f", assessment.confidence, _AUTO_DEBATE_THRESHOLD)
 
     if debate and assessment:
         evidence_summary = _build_evidence_summary(actions_log)
@@ -986,6 +1024,11 @@ async def reason_full(
                     answer = action[1]
                     actions_log.append({"tool": "REVISION", "args": f"round {debate_round + 1}", "observation": answer})
                     break
+                elif action and action[0] in ("FIND", "DETAILS", "RELATED", "COMPARE", "LIST", "SCHEMA"):
+                    from synapse.tools.graph_tools import execute_tool
+                    result_text = execute_tool(action[0], action[1], graph)
+                    messages.append({"role": "user", "content": f"Result:\n{result_text}"})
+                    actions_log.append({"tool": action[0], "args": action[1], "observation": result_text})
                 elif action and action[0] == "GRAPH_QUERY":
                     try:
                         sanitized = _sanitize_cypher(action[1])

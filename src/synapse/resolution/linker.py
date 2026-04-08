@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from difflib import SequenceMatcher
 
 from synapse.models.entity import Entity
@@ -40,17 +41,27 @@ def are_same_entity(
     if a == b:
         return True
 
-    # Fuzzy ratio
+    # Fuzzy ratio — but reject if numeric identifiers differ
     ratio = SequenceMatcher(None, a, b).ratio()
     if ratio >= threshold:
-        return True
+        # Extract numbers from both names — if both have numbers and they differ, reject
+        nums_a = set(re.findall(r"\d+", a))
+        nums_b = set(re.findall(r"\d+", b))
+        if nums_a and nums_b and nums_a != nums_b:
+            pass  # Different product numbers (e.g., 1042 vs 1052) — not the same
+        else:
+            return True
 
-    # Prefix match (one is prefix of the other, min 4 chars)
+    # Substring match (one is contained in the other)
+    # Catches "bs 1042" inside "silres bs 1042"
+    # The shorter string must be at least 4 chars AND at least 60% of the longer
+    # to avoid false positives like "bs 104" matching both "bs 1042" and "bs 1052"
     min_len = min(len(a), len(b))
-    if min_len >= 4:
+    max_len = max(len(a), len(b))
+    if min_len >= 4 and min_len / max_len >= 0.35:
         shorter = a if len(a) <= len(b) else b
         longer = b if len(a) <= len(b) else a
-        if longer.startswith(shorter):
+        if shorter in longer:
             return True
 
     return False

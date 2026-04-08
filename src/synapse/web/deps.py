@@ -35,8 +35,9 @@ def init_dependencies() -> None:
 
     import os
     _settings = get_settings()
-    # Force wacker graph for the demo (env override takes precedence)
-    _settings.graph_name = os.environ.get("SYNAPSE_GRAPH_NAME", "wacker")
+    # Force graph name for the demo — defaults to "wacker-3" locally,
+    # "wacker" in Docker (set via fly.toml env)
+    _settings.graph_name = os.environ.get("SYNAPSE_GRAPH_NAME", "wacker-3")
 
     _store = _settings.get_instance_store()
     # Allow SQLite access from FastAPI thread pool

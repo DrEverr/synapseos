@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synapseos"
-version = "0.3.0"
+version = "0.5.0"
 description = "Domain-agnostic knowledge operating system — bootstrap ontologies from documents, extract knowledge graphs, answer multi-hop reasoning questions"
 requires-python = ">=3.11"
 dependencies = [
@@ -45,6 +45,9 @@ synapse-web = "synapse.web.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"synapse.web" = ["static/**/*"]
 
 [tool.ruff]
 line-length = 100

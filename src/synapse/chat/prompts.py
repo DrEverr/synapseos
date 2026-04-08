@@ -23,56 +23,60 @@ Return a JSON object with:
 Return ONLY the JSON, nothing else."""
 
 
-REASONING_SYSTEM = """You are a knowledge graph reasoning agent. You answer questions by querying a FalkorDB knowledge graph.
+REASONING_SYSTEM = """You are a knowledge graph reasoning agent. You answer questions using structured tools that search a knowledge graph.
 
 TOOLS (use exactly ONE per step):
-1. GRAPH_QUERY(cypher) — execute a read-only Cypher query
-2. SECTION_TEXT(section_id) — retrieve full text of a document section
-3. ANSWER(text) — provide the final answer (terminates reasoning)
+1. FIND(name) — Smart search for entities by name. Handles ®™ symbols, partial names, keyword fallback. Example: FIND(BS 1052) or FIND(viscosity)
+2. DETAILS(name) — Get ALL properties and relationships of an entity in one call. Returns properties, outgoing/incoming relationships. Example: DETAILS(silres bs 1052)
+3. RELATED(name, REL_TYPE) — Find entities connected by a specific relationship type. REL_TYPE is optional. Example: RELATED(silres bs 1052, TREATS_SUBSTRATE) or RELATED(silres bs 1052)
+4. COMPARE(name1, name2) — Compare two entities side by side: properties, relationships, shared connections. Example: COMPARE(silres bs 1052, silres bs 5137)
+5. LIST(TYPE) — List all entities of a given type. Example: LIST(PRODUCT) or LIST(PHYSICAL_PROPERTY)
+6. SCHEMA() — Show all entity types and relationship types available in the graph with instance counts. Use this first if unsure what types exist.
+7. SECTION_TEXT(section_id) — Retrieve full text of a document section.
+8. ANSWER(text) — Provide the final answer (terminates reasoning).
 
-KNOWLEDGE GRAPH SCHEMA:
+KNOWLEDGE GRAPH INFO:
 Node types: {entity_types}
 Relationship types: {relationship_types}
-All entity nodes have a `canonical_name` property (lowercase, normalized).
-
-═══ CYPHER SYNTAX RULES ═══
-• Write raw Cypher directly inside the parentheses. NO quotes around the query.
-• Always use toLower() and CONTAINS for entity matching.
-• Only read queries (MATCH ... RETURN). Never use CREATE, DELETE, SET, MERGE, DROP, or REMOVE.
-• Use inline string values, not $parameters.
-• IMPORTANT: Always add WHERE COALESCE(n.verified, true) = true for entity nodes to exclude unverified AI-generated data.
-
-═══ VALID EXAMPLES ═══
-
-Find an entity:
-Action: GRAPH_QUERY(MATCH (n) WHERE toLower(n.canonical_name) CONTAINS 'search term' RETURN n.canonical_name, labels(n), n.text)
-
-Find all neighbors:
-Action: GRAPH_QUERY(MATCH (n)-[r]-(m) WHERE toLower(n.canonical_name) CONTAINS 'entity name' RETURN type(r), m.canonical_name, labels(m))
-
-Multi-hop chain:
-Action: GRAPH_QUERY(MATCH (a)-[r1]->(b)-[r2]->(c) WHERE toLower(a.canonical_name) CONTAINS 'entity' RETURN a.canonical_name, type(r1), b.canonical_name, type(r2), c.canonical_name)
-
-Variable-length path:
-Action: GRAPH_QUERY(MATCH p = (a)-[*1..3]-(b) WHERE toLower(a.canonical_name) CONTAINS 'entity' RETURN [n in nodes(p) | n.canonical_name] AS path, [r in relationships(p) | type(r)] AS rels LIMIT 20)
-
-═══ WRONG (will fail) ═══
-Action: GRAPH_QUERY("MATCH (n) RETURN n")          ← quotes around Cypher
-Action: GRAPH_QUERY(MATCH (n) RETURN n)             ← then GRAPH_QUERY(MATCH (m) RETURN m)  ← two actions in one step
 
 ═══ REASONING STRATEGY ═══
 1. ONE action per step. Never issue multiple actions in a single response.
 2. Keep Thought to 1-2 sentences.
-3. Start broad: query ALL neighbors of key entities first.
-4. Use multi-hop queries aggressively.
-5. If a query returns no results, try shorter substrings or synonyms.
-6. When you have enough information, immediately use ANSWER().
-7. Cite specific entities and relationships from the graph in your answer.
-8. Budget: you have ~12 steps max.
+3. Start with FIND to locate entities mentioned in the question.
+4. Use DETAILS to get full information about found entities.
+5. Use RELATED to explore specific connection types.
+6. Use COMPARE when the question asks to compare alternatives.
+7. Use SCHEMA if unsure what types exist in the graph.
+8. When you have enough information, immediately use ANSWER().
+9. Only state facts from tool results. Never fabricate data.
+10. Budget: ~10 steps max.
+
+═══ ANSWER STYLE ═══
+Your ANSWER must be written for a domain expert, not for a developer.
+- Be concise and direct. Lead with the recommendation or conclusion.
+- DO NOT use numbered references like [1], [2], [7].
+- NEVER mention tool names (FIND, DETAILS, RELATED, COMPARE), relationship types
+  (HAS_PHYSICAL_PROPERTY, TREATS_SUBSTRATE), node labels, or graph internals.
+- NEVER cite query mechanics like "according to DETAILS(...)" or
+  "via [RELATIONSHIP_TYPE]->[NODE_TYPE]". The user does not know or care about the graph.
+- DO reference product names, document names, and concrete data values.
+- Use markdown formatting: headers, bold, tables, bullet points where helpful.
+- If data is insufficient, say so clearly and list what information is missing.
+- Keep it as short as the question demands — a simple question gets a short answer.
 
 FORMAT (every response MUST follow this exactly):
 Thought: [1-2 sentences only]
-Action: GRAPH_QUERY(MATCH ...)
+Action: FIND(search term)
+— or —
+Action: DETAILS(entity name)
+— or —
+Action: RELATED(entity name, RELATIONSHIP_TYPE)
+— or —
+Action: COMPARE(entity1, entity2)
+— or —
+Action: LIST(ENTITY_TYPE)
+— or —
+Action: SCHEMA()
 — or —
 Action: SECTION_TEXT(section_id)
 — or —
@@ -154,8 +158,9 @@ SUGGESTED IMPROVEMENTS:
 {improvements}
 
 Please provide a REVISED answer that addresses all the issues raised.
-You have access to the same knowledge graph. If you need more data, use GRAPH_QUERY.
-When ready, provide your improved answer with Action: ANSWER(...)."""
+You have access to the same tools (FIND, DETAILS, RELATED, COMPARE, LIST). If you need more data, query the graph first.
+When ready, provide your improved answer with Action: ANSWER(...).
+Remember: keep the answer concise, do NOT mention tool names or graph internals in the answer."""
 
 
 ENRICHMENT_SYSTEM = "You are an expert knowledge extraction system."
