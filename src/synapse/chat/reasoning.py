@@ -499,14 +499,14 @@ def _build_conversation_context(
 
 def _build_evidence_summary(actions_log: list[dict[str, str]]) -> str:
     """Build a concise summary of evidence gathered during reasoning for self-assessment."""
+    _EVIDENCE_TOOLS = {"GRAPH_QUERY", "FIND", "DETAILS", "RELATED", "COMPARE", "LIST", "SCHEMA"}
     evidence_parts: list[str] = []
     for entry in actions_log:
         tool = entry.get("tool", "")
         observation = entry.get("observation", "")
-        if tool == "GRAPH_QUERY" and observation and "(no results)" not in observation:
-            # Truncate long query results
+        if tool in _EVIDENCE_TOOLS and observation and "no " not in observation[:20].lower() and "error" not in observation[:20].lower():
             obs_truncated = observation[:500] + "..." if len(observation) > 500 else observation
-            evidence_parts.append(f"[Graph] {obs_truncated}")
+            evidence_parts.append(f"[{tool}] {obs_truncated}")
         elif tool == "SECTION_TEXT" and observation:
             obs_truncated = observation[:300] + "..." if len(observation) > 300 else observation
             evidence_parts.append(f"[Section] {obs_truncated}")
