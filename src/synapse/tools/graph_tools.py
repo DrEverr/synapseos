@@ -77,11 +77,27 @@ def _tool_details(name: str, graph: GraphStore, cfg: GraphToolsConfig) -> str:
     if not name:
         return "Error: DETAILS requires a name argument."
 
-    resolved = _resolve_entity(name, graph, cfg)
-    if not resolved:
+    # Find ALL matching entities
+    matches = smart_search(name, graph, cfg, limit=10)
+    if not matches:
         return f"Entity not found: '{name}'. Try FIND({name}) first."
 
-    canonical, etype = resolved
+    nprop = cfg.name_property
+    sections = []
+    for match in matches:
+        canonical = match.get(nprop, match.get("canonical_name", match.get("name")))
+        etype = match.get("entity_type", "?")
+        if canonical:
+            section = _entity_details(canonical, etype, graph, cfg)
+            sections.append(section)
+
+    if len(sections) == 1:
+        return sections[0]
+    return f"Found {len(sections)} matching entities:\n\n" + "\n\n---\n\n".join(sections)
+
+
+def _entity_details(canonical: str, etype: str, graph: GraphStore, cfg: GraphToolsConfig) -> str:
+    """Build detailed view of a single entity."""
     nprop = cfg.name_property
     exclude = cfg.exclude_clause("n")
     lines = [f"Entity: [{etype}] {canonical}"]
