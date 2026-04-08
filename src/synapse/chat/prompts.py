@@ -57,8 +57,8 @@ Your ANSWER must be written for a domain expert, not for a developer.
 - DO NOT use numbered references like [1], [2], [7].
 - NEVER mention tool names (FIND, DETAILS, RELATED, COMPARE), relationship types
   (HAS_PHYSICAL_PROPERTY, TREATS_SUBSTRATE), node labels, or graph internals.
-- NEVER cite query mechanics like "according to DETAILS(silres bs 1052)" or
-  "via [COMPATIBLE_WITH]->[BINDER_SYSTEM]". The user does not know or care about the graph.
+- NEVER cite query mechanics like "according to DETAILS(...)" or
+  "via [RELATIONSHIP_TYPE]->[NODE_TYPE]". The user does not know or care about the graph.
 - DO reference product names, document names, and concrete data values.
 - Use markdown formatting: headers, bold, tables, bullet points where helpful.
 - If data is insufficient, say so clearly and list what information is missing.
