@@ -69,26 +69,40 @@ def _tool_details(name: str, graph: GraphStore) -> str:
     canonical, etype = resolved
     lines = [f"Entity: [{etype}] {canonical}"]
 
-    # Node properties
+    # Node properties — fetch ALL attributes
     props = graph.query(
         "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
         "AND n.canonical_name = $name "
-        "RETURN n.confidence, n.properties, n.source_docs, n.source_text, n.text",
+        "RETURN n.text, n.confidence, n.properties, n.source_docs, "
+        "n.source_text, n.verified, n.created_at, n.last_confirmed_at",
         params={"name": canonical},
     )
     if props:
         row = props[0]
-        lines.append(f"  Confidence: {row[0]}")
-        lines.append(f"  Source: {row[2]}")
-        if row[1] and row[1] != "{}":
+        text, confidence, properties_json, source_docs = row[0], row[1], row[2], row[3]
+        source_text, verified, created_at, last_confirmed = row[4], row[5], row[6], row[7]
+
+        lines.append(f"  Text: {text}")
+        lines.append(f"  Confidence: {confidence}")
+        lines.append(f"  Source: {source_docs}")
+        lines.append(f"  Verified: {verified}")
+        if created_at:
+            lines.append(f"  Created: {created_at}")
+        if last_confirmed:
+            lines.append(f"  Last confirmed: {last_confirmed}")
+        if source_text:
+            lines.append(f"  Source text: \"{source_text}\"")
+
+        # Parse JSON properties (value, unit, condition, etc.)
+        if properties_json and properties_json != "{}":
             try:
-                p = json.loads(row[1]) if isinstance(row[1], str) else row[1]
-                for k, v in p.items():
-                    lines.append(f"  {k}: {v}")
+                p = json.loads(properties_json) if isinstance(properties_json, str) else properties_json
+                if p:
+                    lines.append("  Properties:")
+                    for k, v in p.items():
+                        lines.append(f"    {k}: {v}")
             except (json.JSONDecodeError, TypeError):
                 pass
-        if row[3]:
-            lines.append(f"  Source text: \"{row[3]}\"")
 
     # Outgoing relationships
     out_rels = graph.query(
