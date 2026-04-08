@@ -91,29 +91,41 @@ def _search_contains(graph: GraphStore, term: str, limit: int) -> list[dict]:
     rows = graph.query(
         "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
         "AND toLower(n.canonical_name) CONTAINS toLower($term) "
-        f"RETURN n.canonical_name, labels(n)[0], n.confidence, n.source_docs "
-        f"ORDER BY n.confidence DESC LIMIT {limit}",
+        f"RETURN n, labels(n)[0] "
+        f"LIMIT {limit}",
         params={"term": term},
     )
-    return [
-        {"canonical_name": r[0], "entity_type": r[1], "confidence": r[2], "source_docs": r[3]}
-        for r in rows if r[0]
-    ]
+    return _nodes_to_results(rows)
 
 
 def _search_all_words(graph: GraphStore, words: list[str], limit: int) -> list[dict]:
     """Search entities where canonical_name CONTAINS ALL words."""
-    # Build dynamic WHERE clause
     conditions = " AND ".join(
         f"toLower(n.canonical_name) CONTAINS '{w}'" for w in words
     )
     rows = graph.query(
         f"MATCH (n) WHERE NOT n:Document AND NOT n:Section "
         f"AND {conditions} "
-        f"RETURN n.canonical_name, labels(n)[0], n.confidence, n.source_docs "
-        f"ORDER BY n.confidence DESC LIMIT {limit}",
+        f"RETURN n, labels(n)[0] "
+        f"LIMIT {limit}",
     )
-    return [
-        {"canonical_name": r[0], "entity_type": r[1], "confidence": r[2], "source_docs": r[3]}
-        for r in rows if r[0]
-    ]
+    return _nodes_to_results(rows)
+
+
+def _nodes_to_results(rows: list) -> list[dict]:
+    """Convert query results with (node, label) to result dicts."""
+    results = []
+    for r in rows:
+        node, label = r[0], r[1]
+        if not hasattr(node, "properties"):
+            continue
+        props = node.properties
+        results.append({
+            "canonical_name": props.get("canonical_name", ""),
+            "entity_type": label,
+            "confidence": props.get("confidence"),
+            "source_docs": props.get("source_docs", ""),
+        })
+    # Sort by confidence descending (handle None)
+    results.sort(key=lambda x: x.get("confidence") or 0, reverse=True)
+    return results

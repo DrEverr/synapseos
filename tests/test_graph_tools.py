@@ -61,6 +61,12 @@ class TestExtractKeywords:
 
 # ── smart_search ─────────────────────────────────────────────
 
+class _FakeNode:
+    """Minimal fake FalkorDB Node for testing."""
+    def __init__(self, props):
+        self.properties = props
+
+
 class TestSmartSearch:
     def _mock_graph(self, responses):
         """Create a mock GraphStore that returns different results per call."""
@@ -68,9 +74,13 @@ class TestSmartSearch:
         graph.query = MagicMock(side_effect=responses)
         return graph
 
+    def _node_row(self, name, etype, conf=1.0, source="doc.pdf"):
+        """Create a fake (node, label) result row."""
+        return [_FakeNode({"canonical_name": name, "confidence": conf, "source_docs": source}), etype]
+
     def test_finds_with_full_name(self):
         graph = self._mock_graph([
-            [["silres bs 1052", "PRODUCT", 1.0, "doc.pdf"]],  # first CONTAINS
+            [self._node_row("silres bs 1052", "PRODUCT")],
         ])
         results = smart_search("SILRES® BS 1052", graph)
         assert len(results) == 1
@@ -79,7 +89,7 @@ class TestSmartSearch:
     def test_fallback_to_keyword(self):
         graph = self._mock_graph([
             [],  # full name: no results
-            [["silres bs 1052", "PRODUCT", 1.0, "doc.pdf"]],  # keyword "bs 1052"
+            [self._node_row("silres bs 1052", "PRODUCT")],
         ])
         results = smart_search("SILRES® BS 1052", graph)
         assert len(results) == 1

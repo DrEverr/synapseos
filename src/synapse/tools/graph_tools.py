@@ -209,23 +209,29 @@ def _tool_compare(args: str, graph: GraphStore) -> str:
     lines = [f"Comparing '{resolved1[0]}' vs '{resolved2[0]}':"]
     lines.append("")
 
-    # Properties comparison
+    # Properties comparison — dynamic node attributes
     for label, (canonical, etype) in [("Entity 1", resolved1), ("Entity 2", resolved2)]:
         lines.append(f"  {label}: [{etype}] {canonical}")
-        props = graph.query(
+        rows = graph.query(
             "MATCH (n) WHERE n.canonical_name = $name AND NOT n:Document AND NOT n:Section "
-            "RETURN n.properties, n.confidence, n.source_docs",
+            "RETURN n LIMIT 1",
             params={"name": canonical},
         )
-        if props:
-            lines.append(f"    Confidence: {props[0][0] if props[0][1] is None else props[0][1]}")
-            if props[0][0] and props[0][0] != "{}":
-                try:
-                    p = json.loads(props[0][0]) if isinstance(props[0][0], str) else props[0][0]
-                    for k, v in p.items():
-                        lines.append(f"    {k}: {v}")
-                except (json.JSONDecodeError, TypeError):
-                    pass
+        if rows and hasattr(rows[0][0], "properties"):
+            _SKIP = {"id", "canonical_name"}
+            for k, v in sorted(rows[0][0].properties.items()):
+                if k in _SKIP or v is None or v == "" or v == "{}":
+                    continue
+                if k == "properties" and isinstance(v, str) and v != "{}":
+                    try:
+                        nested = json.loads(v)
+                        if nested:
+                            for nk, nv in nested.items():
+                                lines.append(f"    {nk}: {nv}")
+                            continue
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                lines.append(f"    {k}: {v}")
 
         # Relationships
         rels = graph.query(
@@ -274,7 +280,7 @@ def _tool_list(args: str, graph: GraphStore) -> str:
 
     rows = graph.query(
         f"MATCH (n:{entity_type}) "
-        f"RETURN n.canonical_name, n.confidence "
+        f"RETURN n "
         f"ORDER BY n.canonical_name LIMIT {limit}",
     )
     if not rows:
@@ -282,7 +288,14 @@ def _tool_list(args: str, graph: GraphStore) -> str:
 
     lines = [f"Entities of type {entity_type} ({len(rows)} shown):"]
     for r in rows:
-        lines.append(f"  {r[0]}  (conf: {r[1]})")
+        node = r[0]
+        if hasattr(node, "properties"):
+            p = node.properties
+            name = p.get("canonical_name", "?")
+            conf = p.get("confidence", "?")
+            lines.append(f"  {name}  (conf: {conf})")
+        else:
+            lines.append(f"  {r[0]}")
     return "\n".join(lines)
 
 
