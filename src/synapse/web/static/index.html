@@ -125,8 +125,8 @@
                                 <div x-show="msg.role === 'assistant'" x-html="renderMarkdown(msg.text)"></div>
                                 <!-- Quality badges -->
                                 <div x-show="msg.role === 'assistant' && msg.confidence" class="flex gap-2 mt-2 flex-wrap">
-                                    <span class="badge bg-indigo-100 text-indigo-700" x-text="'Confidence ' + Math.round((msg.confidence||0)*100) + '%'"></span>
-                                    <span class="badge bg-emerald-100 text-emerald-700" x-text="'Grounded ' + Math.round((msg.groundedness||0)*100) + '%'"></span>
+                                    <span class="badge bg-indigo-100 text-indigo-700 cursor-help" title="How confident the AI is that the answer is correct and complete" x-text="'Confidence ' + Math.round((msg.confidence||0)*100) + '%'"></span>
+                                    <span class="badge bg-emerald-100 text-emerald-700 cursor-help" title="What fraction of claims are backed by actual data from the knowledge graph (vs. generated/hallucinated)" x-text="'Grounded ' + Math.round((msg.groundedness||0)*100) + '%'"></span>
                                     <span class="badge bg-gray-100 text-gray-600" x-text="(msg.steps||0) + ' steps'"></span>
                                     <span class="badge bg-gray-100 text-gray-600" x-text="(msg.elapsed||0) + 's'"></span>
                                 </div>

@@ -69,6 +69,9 @@ Action: GRAPH_QUERY(MATCH (n) RETURN n)             ← then GRAPH_QUERY(MATCH (
 6. When you have enough information, immediately use ANSWER().
 7. Cite specific entities and relationships from the graph in your answer.
 8. Budget: you have ~12 steps max.
+9. DO NOT use numbered references like [1], [2], [7]. Instead, name sources inline
+   (e.g., "according to the BS 5137 data sheet" or "based on the graph data for SILRES BS 1052").
+10. Only state facts that appeared in query results. Never fabricate or extrapolate Observations.
 
 FORMAT (every response MUST follow this exactly):
 Thought: [1-2 sentences only]
