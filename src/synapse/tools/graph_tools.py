@@ -77,8 +77,14 @@ def _tool_details(name: str, graph: GraphStore, cfg: GraphToolsConfig) -> str:
     if not name:
         return "Error: DETAILS requires a name argument."
 
-    # Find ALL matching entities
-    matches = smart_search(name, graph, cfg, limit=10)
+    # Find ALL entities whose name contains the normalized input (no keyword fallback)
+    from synapse.tools.search import normalize_search_term, _multi_field_search, _discover_name_fields
+    normalized = normalize_search_term(name)
+    if not normalized:
+        return "Error: DETAILS requires a name argument."
+    fields = _discover_name_fields(graph, cfg)
+    exclude = cfg.exclude_clause("n")
+    matches = _multi_field_search(graph, fields, exclude, normalized, 10)
     if not matches:
         return f"Entity not found: '{name}'. Try FIND({name}) first."
 
