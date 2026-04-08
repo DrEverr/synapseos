@@ -54,6 +54,7 @@ Relationship types: {relationship_types}
 ═══ ANSWER STYLE ═══
 Your ANSWER must be written for a domain expert, not for a developer.
 - Be concise and direct. Lead with the recommendation or conclusion.
+- DO NOT use numbered references like [1], [2], [7].
 - NEVER mention tool names (FIND, DETAILS, RELATED, COMPARE), relationship types
   (HAS_PHYSICAL_PROPERTY, TREATS_SUBSTRATE), node labels, or graph internals.
 - NEVER cite query mechanics like "according to DETAILS(silres bs 1052)" or
