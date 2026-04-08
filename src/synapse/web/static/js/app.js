@@ -199,6 +199,10 @@ function mainApp() {
                     completeness: msg.completeness,
                     steps: msg.steps,
                     elapsed: msg.elapsed,
+                    assessment: msg.assessment || '',
+                    gaps: msg.gaps || [],
+                    debate_rounds: msg.debate_rounds || 0,
+                    _showAssessment: false,
                 });
                 this.$nextTick(() => this.scrollChat());
             } else if (msg.type === 'done') {

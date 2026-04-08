@@ -292,6 +292,10 @@ async def _handle_question(
         answer_msg["confidence"] = round(result.assessment.confidence, 2)
         answer_msg["groundedness"] = round(result.assessment.groundedness, 2)
         answer_msg["completeness"] = round(result.assessment.completeness, 2)
+        answer_msg["assessment"] = result.assessment.reasoning
+        answer_msg["gaps"] = result.assessment.gaps
+    if result.debate_rounds:
+        answer_msg["debate_rounds"] = result.debate_rounds
     await websocket.send_json(answer_msg)
     await websocket.send_json({"type": "done"})
 

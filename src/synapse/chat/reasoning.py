@@ -930,9 +930,14 @@ async def reason_full(
         if assessment.gaps:
             print(f"Gaps: {', '.join(assessment.gaps)}")
 
-    # Phase 3B: Debate — challenger reviews the answer (optional)
+    # Phase 3B: Debate — auto-trigger when confidence < 51%, or when explicitly requested
+    _AUTO_DEBATE_THRESHOLD = 0.51
     challenge = None
     debate_rounds = 0
+
+    if not debate and assessment and assessment.confidence < _AUTO_DEBATE_THRESHOLD:
+        debate = True
+        logger.info("Auto-debate triggered: confidence %.2f < %.2f", assessment.confidence, _AUTO_DEBATE_THRESHOLD)
 
     if debate and assessment:
         evidence_summary = _build_evidence_summary(actions_log)
