@@ -1024,6 +1024,11 @@ async def reason_full(
                     answer = action[1]
                     actions_log.append({"tool": "REVISION", "args": f"round {debate_round + 1}", "observation": answer})
                     break
+                elif action and action[0] in ("FIND", "DETAILS", "RELATED", "COMPARE", "LIST", "SCHEMA"):
+                    from synapse.tools.graph_tools import execute_tool
+                    result_text = execute_tool(action[0], action[1], graph)
+                    messages.append({"role": "user", "content": f"Result:\n{result_text}"})
+                    actions_log.append({"tool": action[0], "args": action[1], "observation": result_text})
                 elif action and action[0] == "GRAPH_QUERY":
                     try:
                         sanitized = _sanitize_cypher(action[1])

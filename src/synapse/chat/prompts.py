@@ -158,8 +158,9 @@ SUGGESTED IMPROVEMENTS:
 {improvements}
 
 Please provide a REVISED answer that addresses all the issues raised.
-You have access to the same knowledge graph. If you need more data, use GRAPH_QUERY.
-When ready, provide your improved answer with Action: ANSWER(...)."""
+You have access to the same tools (FIND, DETAILS, RELATED, COMPARE, LIST). If you need more data, query the graph first.
+When ready, provide your improved answer with Action: ANSWER(...).
+Remember: keep the answer concise, do NOT mention tool names or graph internals in the answer."""
 
 
 ENRICHMENT_SYSTEM = "You are an expert knowledge extraction system."
