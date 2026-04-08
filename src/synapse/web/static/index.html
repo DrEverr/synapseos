@@ -126,12 +126,12 @@
                                 <!-- Quality badges -->
                                 <div x-show="msg.role === 'assistant' && msg.confidence" class="mt-3 border-t border-gray-100 pt-2">
                                     <div class="flex gap-2 flex-wrap items-center">
-                                        <span class="badge bg-indigo-100 text-indigo-700 cursor-help" title="How confident the AI is that the answer is correct and complete" x-text="'Confidence ' + Math.round((msg.confidence||0)*100) + '%'"></span>
-                                        <span class="badge bg-emerald-100 text-emerald-700 cursor-help" title="What fraction of claims are backed by actual data from the knowledge graph (vs. generated/hallucinated)" x-text="'Grounded ' + Math.round((msg.groundedness||0)*100) + '%'"></span>
+                                        <span class="badge cursor-help" :class="(msg.confidence||0) >= 0.6 ? 'bg-emerald-100 text-emerald-700' : (msg.confidence||0) >= 0.3 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'" title="How confident the AI is that the answer is correct and complete" x-text="'Confidence ' + Math.round((msg.confidence||0)*100) + '%'"></span>
+                                        <span class="badge cursor-help" :class="(msg.groundedness||0) >= 0.6 ? 'bg-emerald-100 text-emerald-700' : (msg.groundedness||0) >= 0.3 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'" title="What fraction of claims are backed by actual data from the knowledge graph (vs. generated/hallucinated)" x-text="'Grounded ' + Math.round((msg.groundedness||0)*100) + '%'"></span>
                                         <span x-show="msg.debate_rounds" class="badge bg-amber-100 text-amber-700" x-text="'Debate: ' + (msg.debate_rounds||0) + ' rounds'"></span>
                                         <span class="badge bg-gray-100 text-gray-600" x-text="(msg.steps||0) + ' steps'"></span>
                                         <span class="badge bg-gray-100 text-gray-600" x-text="(msg.elapsed||0) + 's'"></span>
-                                        <button x-show="msg.assessment" @click="msg._showAssessment = !msg._showAssessment" class="text-xs text-gray-400 hover:text-accent ml-1 transition" x-text="msg._showAssessment ? 'Hide details' : 'Show details'"></button>
+                                        <button x-show="msg.assessment && msg.assessment.length > 0" @click="msg._showAssessment = !msg._showAssessment" class="text-xs text-gray-400 hover:text-accent ml-1 transition" x-text="msg._showAssessment ? 'Hide details' : 'Show details'"></button>
                                     </div>
                                     <!-- Expandable assessment -->
                                     <div x-show="msg._showAssessment" x-transition class="mt-2 text-xs text-gray-500 bg-gray-50 rounded-lg p-3 space-y-1">
