@@ -1,6 +1,6 @@
 """Smart entity search with normalization and keyword fallback.
 
-Works on any graph — no domain-specific knowledge required.
+Works on any graph — uses GraphToolsConfig for auto-discovered schema.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ import re
 import logging
 
 from synapse.storage.graph import GraphStore
+from synapse.tools.config import GraphToolsConfig
 
 logger = logging.getLogger(__name__)
 
@@ -29,16 +30,12 @@ def normalize_search_term(raw: str) -> str:
 def extract_keywords(term: str) -> list[str]:
     """Extract meaningful keywords from a normalized term, longest first."""
     words = [w for w in term.split() if w not in _NOISE_WORDS and len(w) > 1]
-    # Build keyword candidates: multi-word fragments from right (most specific)
     candidates = []
-    # Full term minus noise
     clean = " ".join(words)
     if clean:
         candidates.append(clean)
-    # Drop first word (often a brand prefix like "silres")
     if len(words) > 1:
         candidates.append(" ".join(words[1:]))
-    # Individual words, longest first
     for w in sorted(words, key=len, reverse=True):
         if w not in candidates:
             candidates.append(w)
@@ -48,71 +45,72 @@ def extract_keywords(term: str) -> list[str]:
 def smart_search(
     name: str,
     graph: GraphStore,
+    config: GraphToolsConfig,
     limit: int = 20,
 ) -> list[dict]:
     """Search for entities by name with progressive fallback strategies.
 
-    Returns list of dicts: {canonical_name, entity_type, confidence, source_docs}
+    Returns list of dicts with all node properties + entity_type.
     """
     normalized = normalize_search_term(name)
     if not normalized:
         return []
 
+    nprop = config.name_property
+    exclude = config.exclude_clause("n")
+
     # Strategy 1: full normalized name
-    results = _search_contains(graph, normalized, limit)
+    results = _search_contains(graph, nprop, exclude, normalized, limit)
     if results:
-        logger.debug("FIND('%s'): found %d results with full term '%s'", name, len(results), normalized)
+        logger.debug("FIND('%s'): found %d with full term '%s'", name, len(results), normalized)
         return results
 
     # Strategy 2: progressive keyword fallback
     keywords = extract_keywords(normalized)
     for kw in keywords:
         if kw == normalized:
-            continue  # already tried
-        results = _search_contains(graph, kw, limit)
+            continue
+        results = _search_contains(graph, nprop, exclude, kw, limit)
         if results:
-            logger.debug("FIND('%s'): found %d results with keyword '%s'", name, len(results), kw)
+            logger.debug("FIND('%s'): found %d with keyword '%s'", name, len(results), kw)
             return results
 
-    # Strategy 3: multi-word intersection (all keywords must match)
+    # Strategy 3: multi-word intersection
     words = [w for w in normalized.split() if w not in _NOISE_WORDS and len(w) > 1]
     if len(words) >= 2:
-        results = _search_all_words(graph, words, limit)
+        results = _search_all_words(graph, nprop, exclude, words, limit)
         if results:
-            logger.debug("FIND('%s'): found %d results with word intersection", name, len(results))
+            logger.debug("FIND('%s'): found %d with word intersection", name, len(results))
             return results
 
     logger.debug("FIND('%s'): no results found", name)
     return []
 
 
-def _search_contains(graph: GraphStore, term: str, limit: int) -> list[dict]:
-    """Search entities where canonical_name CONTAINS term."""
+def _search_contains(graph: GraphStore, nprop: str, exclude: str, term: str, limit: int) -> list[dict]:
+    """Search entities where name property CONTAINS term."""
+    where = f"{exclude} AND " if exclude else ""
     rows = graph.query(
-        "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
-        "AND toLower(n.canonical_name) CONTAINS toLower($term) "
-        f"RETURN n, labels(n)[0] "
-        f"LIMIT {limit}",
+        f"MATCH (n) WHERE {where}"
+        f"toLower(n.{nprop}) CONTAINS toLower($term) "
+        f"RETURN n, labels(n)[0] LIMIT {limit}",
         params={"term": term},
     )
-    return _nodes_to_results(rows)
+    return _nodes_to_results(rows, nprop)
 
 
-def _search_all_words(graph: GraphStore, words: list[str], limit: int) -> list[dict]:
-    """Search entities where canonical_name CONTAINS ALL words."""
-    conditions = " AND ".join(
-        f"toLower(n.canonical_name) CONTAINS '{w}'" for w in words
-    )
+def _search_all_words(graph: GraphStore, nprop: str, exclude: str, words: list[str], limit: int) -> list[dict]:
+    """Search entities where name property CONTAINS ALL words."""
+    conditions = " AND ".join(f"toLower(n.{nprop}) CONTAINS '{w}'" for w in words)
+    where = f"{exclude} AND " if exclude else ""
     rows = graph.query(
-        f"MATCH (n) WHERE NOT n:Document AND NOT n:Section "
-        f"AND {conditions} "
-        f"RETURN n, labels(n)[0] "
-        f"LIMIT {limit}",
+        f"MATCH (n) WHERE {where}{conditions} "
+        f"RETURN n, labels(n)[0] LIMIT {limit}",
     )
-    return _nodes_to_results(rows)
+    return _nodes_to_results(rows, nprop)
 
 
-def _nodes_to_results(rows: list) -> list[dict]:
+def _nodes_to_results(rows: list, nprop: str) -> list[dict]:
     """Convert query results with (node, label) to result dicts."""
     results = []
     for r in rows:
@@ -121,11 +119,9 @@ def _nodes_to_results(rows: list) -> list[dict]:
             continue
         props = node.properties
         results.append({
-            "canonical_name": props.get("canonical_name", ""),
+            **props,
             "entity_type": label,
-            "confidence": props.get("confidence"),
-            "source_docs": props.get("source_docs", ""),
         })
-    # Sort by confidence descending (handle None)
+    # Sort by confidence descending if available
     results.sort(key=lambda x: x.get("confidence") or 0, reverse=True)
     return results

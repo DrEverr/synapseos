@@ -4,7 +4,8 @@ import pytest
 from unittest.mock import MagicMock
 
 from synapse.tools.search import normalize_search_term, extract_keywords, smart_search
-from synapse.tools.graph_tools import execute_tool
+from synapse.tools.config import GraphToolsConfig
+from synapse.tools.graph_tools import execute_tool, _config_cache
 
 
 # ── normalize_search_term ────────────────────────────────────
@@ -68,41 +69,50 @@ class _FakeNode:
 
 
 class TestSmartSearch:
+    CFG = GraphToolsConfig(name_property="canonical_name", exclude_labels={"Document", "Section"})
+
     def _mock_graph(self, responses):
-        """Create a mock GraphStore that returns different results per call."""
         graph = MagicMock()
         graph.query = MagicMock(side_effect=responses)
         return graph
 
     def _node_row(self, name, etype, conf=1.0, source="doc.pdf"):
-        """Create a fake (node, label) result row."""
         return [_FakeNode({"canonical_name": name, "confidence": conf, "source_docs": source}), etype]
 
     def test_finds_with_full_name(self):
         graph = self._mock_graph([
             [self._node_row("silres bs 1052", "PRODUCT")],
         ])
-        results = smart_search("SILRES® BS 1052", graph)
+        results = smart_search("SILRES® BS 1052", graph, self.CFG)
         assert len(results) == 1
         assert results[0]["canonical_name"] == "silres bs 1052"
 
     def test_fallback_to_keyword(self):
         graph = self._mock_graph([
-            [],  # full name: no results
+            [],
             [self._node_row("silres bs 1052", "PRODUCT")],
         ])
-        results = smart_search("SILRES® BS 1052", graph)
+        results = smart_search("SILRES® BS 1052", graph, self.CFG)
         assert len(results) == 1
 
     def test_no_results(self):
         graph = self._mock_graph([[], [], [], []])
-        results = smart_search("nonexistent", graph)
+        results = smart_search("nonexistent", graph, self.CFG)
         assert results == []
 
     def test_empty_input(self):
         graph = MagicMock()
-        results = smart_search("", graph)
+        results = smart_search("", graph, self.CFG)
         assert results == []
+
+    def test_custom_name_property(self):
+        cfg = GraphToolsConfig(name_property="title", exclude_labels=set())
+        graph = self._mock_graph([
+            [self._node_row("some title", "ARTICLE")],
+        ])
+        # Should still work — the query uses cfg.name_property
+        results = smart_search("some title", graph, cfg)
+        assert len(results) == 1
 
 
 # ── execute_tool ─────────────────────────────────────────────
@@ -113,6 +123,8 @@ class TestExecuteTool:
         graph.query = MagicMock(return_value=[])
         graph.get_entity_counts = MagicMock(return_value={"PRODUCT": 10, "CHEMICAL": 5})
         graph.get_relationship_counts = MagicMock(return_value={"HAS_PROPERTY": 20})
+        # Pre-inject config to avoid auto-discovery on mock
+        _config_cache[str(id(graph))] = GraphToolsConfig()
         return graph
 
     def test_find_tool(self):
