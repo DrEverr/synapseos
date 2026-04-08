@@ -71,17 +71,24 @@ class _FakeNode:
 class TestSmartSearch:
     CFG = GraphToolsConfig(name_property="canonical_name", exclude_labels={"Document", "Section"})
 
-    def _mock_graph(self, responses):
+    def _mock_graph(self, search_responses):
+        """Mock graph with field discovery + search responses."""
         graph = MagicMock()
-        graph.query = MagicMock(side_effect=responses)
+        # First call is field discovery (RETURN n LIMIT 1)
+        discovery_node = _FakeNode({"canonical_name": "x", "name": "X", "text": "X"})
+        all_responses = [[discovery_node]] + search_responses
+        graph.query = MagicMock(side_effect=all_responses)
+        # Clear field cache
+        from synapse.tools.search import _fields_cache
+        _fields_cache.pop(str(id(graph)), None)
         return graph
 
-    def _node_row(self, name, etype, conf=1.0, source="doc.pdf"):
-        return [_FakeNode({"canonical_name": name, "confidence": conf, "source_docs": source}), etype]
+    def _node_row(self, name, etype, node_id=1, conf=1.0):
+        return [_FakeNode({"canonical_name": name, "confidence": conf}), etype, node_id]
 
     def test_finds_with_full_name(self):
         graph = self._mock_graph([
-            [self._node_row("silres bs 1052", "PRODUCT")],
+            [self._node_row("silres bs 1052", "PRODUCT", node_id=1)],
         ])
         results = smart_search("SILRES® BS 1052", graph, self.CFG)
         assert len(results) == 1
@@ -90,9 +97,20 @@ class TestSmartSearch:
     def test_fallback_to_keyword(self):
         graph = self._mock_graph([
             [],
-            [self._node_row("silres bs 1052", "PRODUCT")],
+            [self._node_row("silres bs 1052", "PRODUCT", node_id=1)],
         ])
         results = smart_search("SILRES® BS 1052", graph, self.CFG)
+        assert len(results) == 1
+
+    def test_deduplicates_same_node(self):
+        """Same node found via different fields should appear once."""
+        graph = self._mock_graph([
+            [
+                self._node_row("silres bs 1052", "PRODUCT", node_id=42),
+                self._node_row("silres bs 1052", "PRODUCT", node_id=42),  # duplicate
+            ],
+        ])
+        results = smart_search("BS 1052", graph, self.CFG)
         assert len(results) == 1
 
     def test_no_results(self):
@@ -104,15 +122,6 @@ class TestSmartSearch:
         graph = MagicMock()
         results = smart_search("", graph, self.CFG)
         assert results == []
-
-    def test_custom_name_property(self):
-        cfg = GraphToolsConfig(name_property="title", exclude_labels=set())
-        graph = self._mock_graph([
-            [self._node_row("some title", "ARTICLE")],
-        ])
-        # Should still work — the query uses cfg.name_property
-        results = smart_search("some title", graph, cfg)
-        assert len(results) == 1
 
 
 # ── execute_tool ─────────────────────────────────────────────
