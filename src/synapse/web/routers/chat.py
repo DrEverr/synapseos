@@ -208,7 +208,7 @@ async def _handle_question(
     def on_step(step_num: int, phase: str, content: str) -> None:
         # Show first paragraph only (up to first blank line)
         text = content or ""
-        first_para = text.split("\n\n")[0].strip()
+        first_para = text.split("\n")[0].strip()
         queue.put_nowait({
             "type": "step",
             "step": step_num,
