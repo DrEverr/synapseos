@@ -168,17 +168,25 @@ function mainApp() {
         // ---- WebSocket ----
         connectWS() {
             if (this.ws) { try { this.ws.close(); } catch(e) {} }
+            this.ws = null;
+            this._wsReady = new Promise((resolve) => { this._wsResolve = resolve; });
             const proto = location.protocol === 'https:' ? 'wss' : 'ws';
             const token = encodeURIComponent(Auth.wsToken());
             const url = `${proto}://${location.host}/api/chat/${this.currentSession}?token=${token}`;
-            this.ws = new WebSocket(url);
-            this.ws.onmessage = (e) => this.onWSMessage(JSON.parse(e.data));
-            this.ws.onerror = () => { this.sending = false; };
-            this.ws.onclose = () => { this.sending = false; };
+            const ws = new WebSocket(url);
+            ws.onopen = () => { this.ws = ws; this._wsResolve(); };
+            ws.onmessage = (e) => this.onWSMessage(JSON.parse(e.data));
+            ws.onerror = () => { this.sending = false; };
+            ws.onclose = () => { this.sending = false; };
         },
 
-        sendMessage() {
-            if (!this.input.trim() || this.sending || !this.ws) return;
+        async sendMessage() {
+            if (!this.input.trim() || this.sending) return;
+            // Wait for WS to be ready
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                await this._wsReady;
+            }
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
             const text = this.input.trim();
             this.input = '';
             this.messages.push({ role: 'user', text });
