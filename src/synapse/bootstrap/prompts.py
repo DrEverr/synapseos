@@ -223,11 +223,23 @@ Generate the following prompts as a JSON object with these keys:
    - Should specify JSON output format: [{{"subject", "predicate", "object", "confidence"}}]
 
 5. "reasoning_system": System prompt for the ReAct reasoning agent
-   - Must describe the 3 tools: GRAPH_QUERY(cypher), SECTION_TEXT(section_id), ANSWER(text)
-   - Must include Cypher syntax rules (toLower, CONTAINS, read-only)
-   - Must include 5-7 valid Cypher examples relevant to this domain
+   - Must describe the 8 tools (use EXACTLY these signatures):
+     1. FIND(name) — Smart search for entities by name. Handles partial names, special characters, keyword fallback.
+     2. DETAILS(name) — Get ALL properties and relationships of an entity in one call.
+     3. RELATED(name, REL_TYPE) — Find entities connected by a relationship type. REL_TYPE is optional.
+     4. COMPARE(name1, name2) — Compare two entities side by side: properties, shared connections.
+     5. LIST(TYPE) — List all entities of a given type.
+     6. SCHEMA() — Show all entity/relationship types with instance counts. Use first if unsure.
+     7. SECTION_TEXT(section_id) — Retrieve full text of a document section.
+     8. ANSWER(text) — Provide final answer (terminates reasoning).
    - Must contain placeholders: {{entity_types}}, {{relationship_types}}
-   - Must specify the Thought/Action format
+   - Must specify the Thought/Action format (one action per step)
+   - Must include a reasoning strategy: start with FIND, then DETAILS, use RELATED for exploration,
+     COMPARE for comparisons, SCHEMA if unsure what types exist
+   - Must include answer style rules: write for domain experts, never mention tool names or graph
+     internals, reference product names and concrete data values, use markdown formatting
+   - Do NOT mention Cypher, GRAPH_QUERY, or raw database queries — the tools abstract these away
+   - Include 3-5 domain-specific example queries showing which tools to use
 
 6. "reasoning_user": User prompt template for reasoning
    - Must contain placeholders: {{question}}, {{section_summaries}}
@@ -248,7 +260,7 @@ IMPORTANT RULES:
 - Use double curly braces for template placeholders: {{placeholder}}
 - Include domain-specific terminology and examples in all prompts
 - Prompts should be in the same language as the documents ({language})... but system instructions in English
-- The reasoning_system prompt should include domain-relevant Cypher query examples
+- The reasoning_system prompt must use the structured tools (FIND, DETAILS, RELATED, COMPARE, LIST, SCHEMA) — NOT raw Cypher/GRAPH_QUERY
 - All prompts should enforce structured JSON output where applicable
 - CRITICAL for entity_extraction prompts: for any entity type that carries a measurable value
   (physical properties, measurements, dosages, concentrations, etc.), the extraction prompt
