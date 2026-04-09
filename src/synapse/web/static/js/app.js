@@ -97,6 +97,7 @@ function mainApp() {
         unverifiedRels: [],
         unverifiedTriples: [],
         entityContext: null,
+        expandedItem: null,
         reviewOntology: null,
 
         async init() {
@@ -299,6 +300,40 @@ function mainApp() {
 
         async loadOntology() {
             this.reviewOntology = await api('/api/review/ontology');
+        },
+
+        async toggleContext(type, idx, name) {
+            const key = type + '-' + idx;
+            if (this.expandedItem === key) {
+                this.expandedItem = null;
+                this.entityContext = null;
+                return;
+            }
+            this.expandedItem = key;
+            this.entityContext = await api(`/api/review/entity/${encodeURIComponent(name)}/context`);
+        },
+
+        renderContextHtml(ctx) {
+            if (!ctx) return '';
+            const parts = [];
+            if (ctx.source_text) {
+                parts.push(`<div class="p-2 bg-amber-50 border border-amber-200 rounded-lg text-sm mb-2"><span class="font-medium text-amber-700">Extracted from:</span> <em>"${ctx.source_text}"</em></div>`);
+            }
+            if (ctx.question) {
+                parts.push(`<div class="text-xs text-gray-400 mb-1">${ctx.label || 'Chat'}</div>`);
+                parts.push(`<div class="text-sm mb-1"><b>Q:</b> ${ctx.question}</div>`);
+                const answer = ctx.answer || '';
+                const preview = answer.length > 300 ? answer.slice(0, 300) + '...' : answer;
+                parts.push(`<div class="text-sm text-gray-600 p-2 bg-gray-50 rounded max-h-32 overflow-y-auto"><b>A:</b> ${preview}</div>`);
+            }
+            if (ctx.provenance && ctx.provenance.length > 0) {
+                const srcs = ctx.provenance.slice(0, 3).map(p => `${p.doc_title} / ${p.section_title}`).join('<br>');
+                parts.push(`<div class="text-xs text-gray-400 mt-1"><b>Source:</b><br>${srcs}</div>`);
+            }
+            if (parts.length === 0) {
+                parts.push('<div class="text-xs text-gray-400">No additional context available</div>');
+            }
+            return `<div class="mt-1 p-3 bg-gray-50 border border-gray-100 rounded-lg">${parts.join('')}</div>`;
         },
 
         async showEntityContext(name) {
