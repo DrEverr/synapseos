@@ -1,10 +1,13 @@
-# AGENTS.md — SynapseOS3
+# AGENTS.md — SynapseOS
 
 ## Project Overview
 
-SynapseOS3 is a domain-agnostic knowledge operating system written in Python 3.12.
+SynapseOS is a domain-agnostic knowledge operating system written in Python 3.12.
 It bootstraps ontologies from documents, extracts entities/relationships into a
-knowledge graph (FalkorDB), and answers questions via a ReAct reasoning loop.
+knowledge graph (FalkorDB), and answers questions via a ReAct reasoning loop with
+structured graph tools.
+
+**Version:** 0.5.0 (current) → 0.6.0 (planned, see PLAN.md)
 
 **Stack:** Python 3.12 / Click CLI / Pydantic v2 / AsyncOpenAI / FalkorDB / PyMuPDF / pytest
 
@@ -146,6 +149,27 @@ startup time (used in `cli.py`).
 - **Defensive LLM parsing:** After every LLM call, validate results with
   `isinstance` checks and multiple fallback key lookups before use.
 
+### Reasoning & Graph Tools
+
+The chat reasoning loop uses **structured graph tools** (`src/synapse/tools/`) instead
+of raw Cypher. Tools are domain-agnostic and auto-discover the graph schema:
+
+| Tool | Purpose |
+|------|---------|
+| `FIND(name)` | Smart entity search with normalization, partial matching, keyword fallback |
+| `DETAILS(name)` | All properties + incoming/outgoing relationships in one call |
+| `RELATED(name, REL_TYPE)` | Explore connections, optionally filtered by type |
+| `COMPARE(name1, name2)` | Side-by-side property/relationship comparison |
+| `LIST(TYPE)` | List all entities of a given type |
+| `SCHEMA()` | Entity/relationship type counts — graph introspection |
+
+The runtime (`chat/reasoning.py`) dispatches these tools via `execute_tool()` from
+`tools/graph_tools.py`. Legacy `GRAPH_QUERY(cypher)` is still supported for backward
+compatibility with older bootstrapped prompts but should not be used in new prompts.
+
+**Bootstrap prompt generation** (`bootstrap/prompts.py`) instructs the LLM to generate
+reasoning prompts using the structured tools — not raw Cypher.
+
 ### Exports
 
 - No `__all__` declarations. Consumers import directly from specific modules
@@ -163,6 +187,21 @@ startup time (used in `cli.py`).
 - **No mocking:** Current tests exercise real code with real (temp) resources.
   No external service dependencies in tests.
 - **Assertions:** Plain `assert` statements; `pytest.raises` for expected errors.
+
+---
+
+### Known Limitations (targeted for v0.6.0, see PLAN.md)
+
+- **Table extraction:** PDF tables are parsed as flat text by PyMuPDF `get_text()`. LLM extracts
+  a few example rows but misses most of the data in large tables (30+ rows).
+- **Catalog layout:** Repeating product-page layouts (product catalogs) are not detected —
+  the structure parser treats them as narrative documents, leading to incorrect section nesting.
+- **Visual elements:** Icons, badges, and layout-encoded information (e.g., material availability
+  circles on product pages) are not captured.
+- **Entity resolution:** Global fuzzy threshold (0.90) misses duplicates with different verbosity
+  (e.g., `"aluzink (az) - c4"` vs `"aluzink - c4"`).
+- **Legacy prompts:** Domains bootstrapped before the prompt update use `GRAPH_QUERY(cypher)`
+  instead of structured tools. Re-bootstrap to get new-style prompts.
 
 ---
 

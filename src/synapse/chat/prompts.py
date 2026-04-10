@@ -88,7 +88,7 @@ REASONING_USER = """{conversation_context}USER QUESTION: {question}
 RELEVANT SECTIONS (from tree search):
 {section_summaries}
 
-Think step by step. Use GRAPH_QUERY to explore the knowledge graph. When you have enough information, use ANSWER.
+Think step by step. Use FIND to locate entities, DETAILS to get full information, RELATED to explore connections. When you have enough information, use ANSWER.
 If prior turns already fetched relevant data, reuse it instead of re-querying."""
 
 

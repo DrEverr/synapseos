@@ -117,7 +117,7 @@ synapse -g electronics chat -q "What is the maximum operating temperature of the
 synapse -g electronics chat -v -q "Compare voltage regulators by dropout voltage"
 ```
 
-The chat uses a ReAct reasoning loop that queries the knowledge graph with Cypher, reads document sections, and synthesizes answers grounded in your data.
+The chat uses a ReAct reasoning loop with structured graph tools (FIND, DETAILS, RELATED, COMPARE, LIST, SCHEMA) that abstract away raw queries. The agent searches entities, explores relationships, compares alternatives, reads document sections, and synthesizes answers grounded in your data.
 
 ### 4. Grow — Add More Documents
 
@@ -206,6 +206,7 @@ src/synapse/
 │   └── pipeline.py  # Domain analysis → ontology discovery → refinement → prompt generation
 ├── extraction/      # Entity/relationship extraction using generated prompts
 ├── chat/            # ReAct reasoning loop, tree search, post-answer enrichment
+├── tools/           # Structured graph tools (FIND, DETAILS, RELATED, COMPARE, LIST, SCHEMA)
 ├── storage/
 │   ├── graph.py          # FalkorDB — knowledge graph CRUD
 │   ├── instance_store.py # SQLite — ontologies, prompts, metadata (versioned)
@@ -217,6 +218,16 @@ src/synapse/
 ├── config.py        # Settings + OntologyRegistry (reads from SQLite after bootstrap)
 └── cli.py           # Click CLI: init, ingest, chat, inspect, status, versions
 ```
+
+## Roadmap (v0.6.0)
+
+See [PLAN.md](PLAN.md) for detailed implementation plan. Key improvements:
+
+- **Table detection & structured extraction** — detect tables in PDFs, convert to markdown, extract every row as an entity
+- **Catalog-aware section splitting** — detect repeating product-page layouts and split correctly
+- **Visual element extraction** — capture icons, badges, and layout-encoded information
+- **Smarter entity resolution** — type-aware fuzzy matching to eliminate duplicates
+- **Multi-pass extraction** — gap detection and cross-section relationship extraction
 
 ## Tests
 
