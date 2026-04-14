@@ -6,21 +6,224 @@ import asyncio
 import logging
 from pathlib import Path
 
+from collections import defaultdict
+
 from synapse.config import OntologyRegistry, Settings
 from synapse.extraction.discovery import discover_ontology_gaps
 from synapse.extraction.entities import extract_entities
 from synapse.extraction.relationships import extract_relationships
 from synapse.llm.client import LLMClient
+from synapse.llm.templates import safe_format
 from synapse.models.document import Document, Section
 from synapse.models.entity import Entity
 from synapse.models.relationship import Relationship
 from synapse.parsers.structure import extract_document_structure
 from synapse.resolution.linker import resolve_entities
+from synapse.resolution.normalizer import normalize_entity_name
 from synapse.storage.graph import GraphStore
 from synapse.storage.instance_store import InstanceStore
 from synapse.storage.text_cache import TextCache
 
 logger = logging.getLogger(__name__)
+
+
+# ── Cross-section relationship inference ─────────────────────
+
+_MAX_SAMPLES_PER_TYPE = 10
+
+_CROSS_SECTION_USER = """These entities were extracted from DIFFERENT sections of the document "{document_title}".
+Many relationships span across sections and were missed during per-section extraction.
+Your task is to identify these cross-section relationships.
+
+ENTITIES BY TYPE:
+{entity_summary}
+
+RELATIONSHIP TYPES:
+{relationship_types}
+
+Because some types have hundreds of entities, express your findings as RULES.
+
+Return a JSON array of rule objects. Each rule describes how one entity type relates to another:
+
+PATTERN rules (for many entities matching a naming pattern):
+{{"subject_type": "TYPE_A", "predicate": "REL_NAME", "object_type": "TYPE_B",
+  "rule": "prefix_match",
+  "description": "Why this pattern holds"}}
+
+{{"subject_type": "TYPE_A", "predicate": "REL_NAME", "object_type": "TYPE_B",
+  "rule": "contains",
+  "description": "Why this pattern holds"}}
+
+EXPLICIT rules (for small sets — enumerate all pairs):
+{{"subject_type": "TYPE_A", "predicate": "REL_NAME", "object_type": "TYPE_B",
+  "rule": "explicit",
+  "pairs": [{{"subject": "entity A name", "object": "entity B name"}}, ...]}}
+
+Supported rule types:
+- "prefix_match" — object name starts with subject name (case-insensitive)
+- "contains" — object name contains subject name (case-insensitive)
+- "explicit" — listed subject/object pairs only
+
+RULES:
+1. Only use relationship types from the list above.
+2. Do NOT repeat relationships that would already exist within a single section.
+3. Focus on relationships where subject and object come from DIFFERENT entity types.
+4. For pattern rules, verify the pattern holds for the sample entities shown.
+5. Return [] if no cross-section relationships are found."""
+
+
+async def infer_cross_section_relationships(
+    entities: list[Entity],
+    llm: LLMClient,
+    ontology: OntologyRegistry,
+    document_title: str,
+    store: InstanceStore | None = None,
+) -> list[Relationship]:
+    """Use LLM to discover relationship rules across section boundaries.
+
+    Returns expanded relationships from the rules the LLM identifies.
+    """
+    if len(entities) < 2:
+        return []
+
+    # Group entities by type
+    by_type: dict[str, list[Entity]] = defaultdict(list)
+    for e in entities:
+        by_type[e.entity_type].append(e)
+
+    # Build entity summary (sample large types)
+    summary_lines: list[str] = []
+    for etype, ents in sorted(by_type.items()):
+        names = [e.text for e in ents]
+        if len(names) > _MAX_SAMPLES_PER_TYPE:
+            shown = ", ".join(names[:_MAX_SAMPLES_PER_TYPE])
+            summary_lines.append(f"{etype} ({len(names)}, showing {_MAX_SAMPLES_PER_TYPE}): {shown}")
+        else:
+            summary_lines.append(f"{etype} ({len(names)}): {', '.join(names)}")
+    entity_summary = "\n".join(summary_lines)
+
+    # Get system prompt
+    system_prompt = None
+    if store:
+        system_prompt = store.get_prompt("relationship_extraction_system")
+    if not system_prompt:
+        system_prompt = "You are an expert relationship extraction system for technical documents."
+
+    user_prompt = _CROSS_SECTION_USER.format(
+        document_title=document_title,
+        entity_summary=entity_summary,
+        relationship_types=ontology.format_relationship_types(),
+    )
+
+    try:
+        result = await llm.complete_json_lenient(
+            system=system_prompt, user=user_prompt, max_tokens=4096
+        )
+    except Exception as e:
+        logger.error("Cross-section relationship inference failed: %s", e)
+        return []
+
+    if isinstance(result, dict):
+        for key in ("rules", "relationships", "data", "result"):
+            if key in result and isinstance(result[key], list):
+                result = result[key]
+                break
+        else:
+            result = []
+
+    if not isinstance(result, list):
+        return []
+
+    # Expand rules into concrete relationships
+    return _expand_rules(result, by_type, document_title)
+
+
+def _expand_rules(
+    rules: list[dict],
+    by_type: dict[str, list[Entity]],
+    source_doc: str,
+) -> list[Relationship]:
+    """Expand LLM-generated rules into concrete Relationship objects."""
+    rels: list[Relationship] = []
+
+    # Build lookup: normalized name → Entity (per type)
+    lookup: dict[str, dict[str, Entity]] = {}
+    for etype, ents in by_type.items():
+        lookup[etype] = {}
+        for e in ents:
+            lookup[etype][normalize_entity_name(e.text)] = e
+            lookup[etype][e.text.lower()] = e
+
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        subj_type = rule.get("subject_type", "")
+        obj_type = rule.get("object_type", "")
+        predicate = rule.get("predicate", "").upper()
+        rule_kind = rule.get("rule", "")
+
+        subjects = by_type.get(subj_type, [])
+        objects = by_type.get(obj_type, [])
+
+        if not subjects or not objects or not predicate:
+            continue
+
+        if rule_kind == "prefix_match":
+            # Sort subjects longest-first so "GDC Flex" matches before "GDC"
+            sorted_subjects = sorted(subjects, key=lambda e: len(e.text), reverse=True)
+            for obj in objects:
+                obj_lower = obj.text.lower()
+                for subj in sorted_subjects:
+                    if obj_lower.startswith(subj.text.lower()):
+                        rels.append(_make_rel(subj, predicate, obj, source_doc))
+                        break
+
+        elif rule_kind == "contains":
+            sorted_subjects = sorted(subjects, key=lambda e: len(e.text), reverse=True)
+            for obj in objects:
+                obj_lower = obj.text.lower()
+                for subj in sorted_subjects:
+                    if subj.text.lower() in obj_lower:
+                        rels.append(_make_rel(subj, predicate, obj, source_doc))
+                        break
+
+        elif rule_kind == "explicit":
+            pairs = rule.get("pairs", [])
+            subj_lookup = lookup.get(subj_type, {})
+            obj_lookup = lookup.get(obj_type, {})
+            for pair in pairs:
+                if not isinstance(pair, dict):
+                    continue
+                s_name = pair.get("subject", "")
+                o_name = pair.get("object", "")
+                s_ent = subj_lookup.get(s_name.lower()) or subj_lookup.get(
+                    normalize_entity_name(s_name)
+                )
+                o_ent = obj_lookup.get(o_name.lower()) or obj_lookup.get(
+                    normalize_entity_name(o_name)
+                )
+                if s_ent and o_ent:
+                    rels.append(_make_rel(s_ent, predicate, o_ent, source_doc))
+                else:
+                    logger.debug(
+                        "Cross-section explicit pair not matched: %s → %s", s_name, o_name
+                    )
+
+    logger.info("Expanded %d cross-section relationships from %d rules", len(rels), len(rules))
+    return rels
+
+
+def _make_rel(subj: Entity, predicate: str, obj: Entity, source_doc: str) -> Relationship:
+    return Relationship(
+        subject=subj.text,
+        subject_type=subj.entity_type,
+        predicate=predicate,
+        object=obj.text,
+        object_type=obj.entity_type,
+        confidence=0.90,
+        source_doc=source_doc,
+        source_section="cross_section_inference",
+    )
 
 
 async def process_section(
@@ -30,12 +233,50 @@ async def process_section(
     document_title: str,
     store: InstanceStore | None = None,
 ) -> tuple[list[Entity], list[Relationship]]:
-    """Extract entities and relationships from a single section."""
-    entities = await extract_entities(section, llm, ontology, document_title, store)
-    relationships = await extract_relationships(
-        section, entities, llm, ontology, document_title, store
-    )
-    return entities, relationships
+    """Extract entities and relationships from a single section.
+
+    For sections containing large tables (>20 rows), splits the table into
+    batches and runs extraction on each batch.  After extraction, verifies
+    completeness against expected row count and retries once if <70%.
+    """
+    from synapse.extraction.entities import detect_tables, split_table_section
+
+    tables = detect_tables(section.text)
+
+    if tables and any(t["row_count"] > 20 for t in tables):
+        sub_sections = split_table_section(section)
+        all_entities: list[Entity] = []
+        for sub in sub_sections:
+            ents = await extract_entities(sub, llm, ontology, document_title, store)
+            all_entities.extend(ents)
+        # Run relationship extraction ONCE on the full section with ALL entities
+        all_relationships = await extract_relationships(
+            section, all_entities, llm, ontology, document_title, store
+        )
+    else:
+        all_entities = await extract_entities(section, llm, ontology, document_title, store)
+        all_relationships = await extract_relationships(
+            section, all_entities, llm, ontology, document_title, store
+        )
+
+    # Completeness verification for table sections (max 1 retry)
+    if tables:
+        expected_rows = sum(t["row_count"] for t in tables)
+        if expected_rows > 5 and len(all_entities) < expected_rows * 0.7:
+            logger.warning(
+                "Table completeness: %d entities for %d expected rows in '%s', retrying",
+                len(all_entities),
+                expected_rows,
+                section.title,
+            )
+            existing = {e.text.lower() for e in all_entities}
+            retry_ents = await extract_entities(section, llm, ontology, document_title, store)
+            for e in retry_ents:
+                if e.text.lower() not in existing:
+                    all_entities.append(e)
+                    existing.add(e.text.lower())
+
+    return all_entities, all_relationships
 
 
 async def process_document(
@@ -127,6 +368,14 @@ async def process_document(
 
     # Step 3: Entity resolution (dedup)
     all_entities = resolve_entities(all_entities, settings.fuzzy_match_threshold)
+
+    # Step 3b: Cross-section relationship inference (LLM-driven rules)
+    inferred = await infer_cross_section_relationships(
+        all_entities, llm, ontology, doc.title, store
+    )
+    if inferred:
+        all_relationships.extend(inferred)
+        logger.info("Added %d cross-section relationships", len(inferred))
 
     # Step 4: Cache section text
     if text_cache:

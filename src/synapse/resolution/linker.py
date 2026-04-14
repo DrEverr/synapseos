@@ -11,6 +11,26 @@ from synapse.resolution.normalizer import normalize_entity_name
 
 logger = logging.getLogger(__name__)
 
+# Patterns for extracting short abbreviation codes from entity names.
+_ABBREV_PATTERNS = [
+    re.compile(r"^([A-Za-z]{2,5})\s*[—–\-]\s*"),  # "FZ — förzinkat"
+    re.compile(r"\(([A-Za-z]{2,5})\)"),  # "förzinkat (FZ)"
+    re.compile(r"^([A-Z]{2,3})$"),  # "FZ" standalone
+]
+
+
+def _extract_abbreviation(name: str) -> str | None:
+    """Extract a short abbreviation code from an entity name.
+
+    Recognises patterns like ``FZ — förzinkat — C3``, ``förzinkat (FZ)``,
+    or a bare ``FZ``.  Returns the lower-cased abbreviation or *None*.
+    """
+    for pat in _ABBREV_PATTERNS:
+        m = pat.search(name)
+        if m:
+            return m.group(1).lower()
+    return None
+
 
 def are_same_entity(
     name_a: str,
@@ -62,6 +82,14 @@ def are_same_entity(
         shorter = a if len(a) <= len(b) else b
         longer = b if len(a) <= len(b) else a
         if shorter in longer:
+            return True
+
+    # Strategy 4: Abbreviation match (same type only)
+    # "FZ" and "FZ — förzinkat — C3" both yield abbreviation "fz"
+    if type_a and type_b and type_a == type_b:
+        abbrev_a = _extract_abbreviation(name_a)
+        abbrev_b = _extract_abbreviation(name_b)
+        if abbrev_a and abbrev_b and abbrev_a == abbrev_b:
             return True
 
     return False
@@ -117,6 +145,12 @@ def resolve_entities(
     result: list[Entity] = []
     for group_entities in merged.values():
         best = max(group_entities, key=lambda e: e.confidence)
+        # For abbreviation-merged groups, prefer the short code as canonical name
+        if len(group_entities) > 1:
+            abbrevs = [_extract_abbreviation(e.text) for e in group_entities]
+            common = [a for a in abbrevs if a]
+            if common:
+                best.canonical_name = common[0].upper()
         # Merge source docs
         all_docs = {e.source_doc for e in group_entities if e.source_doc}
         if all_docs:

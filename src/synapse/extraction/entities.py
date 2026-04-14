@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from synapse.config import OntologyRegistry
 from synapse.llm.client import LLMClient
@@ -49,6 +50,100 @@ def _get_boilerplate_keywords(store: InstanceStore | None) -> list[str]:
             except json.JSONDecodeError:
                 pass
     return _DEFAULT_BOILERPLATE
+
+
+_TABLE_ROW_RE = re.compile(r"^\|.+\|$")
+_TABLE_SEP_RE = re.compile(r"^\|[\s\-:|]+\|$")
+
+
+def detect_tables(text: str) -> list[dict]:
+    """Detect markdown tables in *text*.
+
+    Returns a list of dicts, each with:
+      header   – the header row text
+      row_count – number of data rows (excluding header and separator)
+      start    – line index of the header row
+      end      – line index after the last data row
+      rows     – list of data-row strings (without header/separator)
+    """
+    lines = text.splitlines()
+    tables: list[dict] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        # Look for header row
+        if _TABLE_ROW_RE.match(line):
+            header_line = i
+            col_count = line.count("|") - 1
+            # Next line must be separator
+            if i + 1 < len(lines) and _TABLE_SEP_RE.match(lines[i + 1].strip()):
+                sep_line = i + 1
+                # Collect data rows
+                data_rows: list[str] = []
+                j = sep_line + 1
+                while j < len(lines):
+                    row = lines[j].strip()
+                    if _TABLE_ROW_RE.match(row) and not _TABLE_SEP_RE.match(row):
+                        data_rows.append(row)
+                        j += 1
+                    else:
+                        break
+                if data_rows:
+                    tables.append({
+                        "header": line,
+                        "row_count": len(data_rows),
+                        "start": header_line,
+                        "end": j,
+                        "rows": data_rows,
+                    })
+                i = j
+                continue
+        i += 1
+    return tables
+
+
+def split_table_section(section: Section, max_rows: int = 20) -> list[Section]:
+    """Split a section containing a large table into sub-sections by row batches.
+
+    Returns *[section]* unchanged when no table exceeds *max_rows*.
+    """
+    tables = detect_tables(section.text)
+    if not tables or all(t["row_count"] <= max_rows for t in tables):
+        return [section]
+
+    lines = section.text.splitlines()
+    sub_sections: list[Section] = []
+
+    for tbl_idx, tbl in enumerate(tables):
+        if tbl["row_count"] <= max_rows:
+            continue
+
+        # Context text = everything NOT inside this table
+        pre_text = "\n".join(lines[: tbl["start"]])
+        post_text = "\n".join(lines[tbl["end"] :])
+        header_block = "\n".join(lines[tbl["start"] : tbl["start"] + 2])  # header + sep
+
+        rows = tbl["rows"]
+        for batch_idx in range(0, len(rows), max_rows):
+            batch = rows[batch_idx : batch_idx + max_rows]
+            batch_text = pre_text + "\n" + header_block + "\n" + "\n".join(batch)
+            if post_text.strip():
+                batch_text += "\n" + post_text
+
+            sub = Section(
+                title=section.title,
+                start_page=section.start_page,
+                end_page=section.end_page,
+                node_id=f"{section.node_id}_tbl{tbl_idx}b{batch_idx // max_rows}",
+                text=batch_text,
+                summary=section.summary,
+            )
+            sub_sections.append(sub)
+
+    # If we only split some tables, the caller still covers the rest via
+    # the prompt-augmented extraction on the full section. For simplicity,
+    # return ONLY the split sub-sections (each contains context + table batch).
+    return sub_sections if sub_sections else [section]
 
 
 def is_boilerplate_section(section: Section, store: InstanceStore | None = None) -> bool:
@@ -139,9 +234,23 @@ async def extract_entities(
             section_text=section.text,
         )
 
+    # Table-aware prompt augmentation
+    tables = detect_tables(section.text)
+    if tables:
+        total_rows = sum(t["row_count"] for t in tables)
+        table_hint = (
+            f"\n\nIMPORTANT: This section contains {len(tables)} data table(s) "
+            f"with {total_rows} total data rows. Extract EVERY row as a separate "
+            f"entity with properties mapped from column headers. Do NOT summarize, "
+            f"skip, or sample rows. Each table row is a distinct entity.\n"
+        )
+        user_prompt = table_hint + user_prompt
+
+    max_tokens = 8192 if tables else 4096
+
     try:
         result = await llm.complete_json_lenient(
-            system=system_prompt, user=user_prompt, max_tokens=4096
+            system=system_prompt, user=user_prompt, max_tokens=max_tokens
         )
     except Exception as e:
         logger.error("Entity extraction LLM call failed for section '%s': %s", section.title, e)
