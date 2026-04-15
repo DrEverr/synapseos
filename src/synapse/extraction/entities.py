@@ -234,6 +234,14 @@ async def extract_entities(
             section_text=section.text,
         )
 
+    # Domain knowledge context injection
+    domain_context = store.get_prompt("domain_knowledge_context") if store else None
+    if domain_context:
+        user_prompt = (
+            "DOMAIN KNOWLEDGE CONTEXT (use this to interpret abbreviations, "
+            "terminology, and conventions):\n" + domain_context + "\n\n" + user_prompt
+        )
+
     # Table-aware prompt augmentation
     tables = detect_tables(section.text)
     if tables:
@@ -246,7 +254,7 @@ async def extract_entities(
         )
         user_prompt = table_hint + user_prompt
 
-    max_tokens = 8192 if tables else 4096
+    max_tokens = 8192
 
     try:
         result = await llm.complete_json_lenient(
@@ -269,12 +277,16 @@ async def extract_entities(
                 result = result[key]
                 break
         else:
-            logger.warning(
-                "Entity extraction returned dict without 'entities' key for '%s': keys=%s",
-                section.title,
-                list(result.keys()) if isinstance(result, dict) else "N/A",
-            )
-            result = []
+            # Single entity dict (has 'text' or 'entity_type') — wrap in list
+            if "text" in result or "entity_type" in result:
+                result = [result]
+            else:
+                logger.warning(
+                    "Entity extraction returned dict without 'entities' key for '%s': keys=%s",
+                    section.title,
+                    list(result.keys()),
+                )
+                result = []
 
     entities: list[Entity] = []
     valid_types = set(ontology.entity_types.keys())

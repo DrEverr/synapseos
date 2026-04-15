@@ -8,6 +8,10 @@ from pathlib import Path
 
 from collections import defaultdict
 
+from synapse.bootstrap.prompts import (
+    DOMAIN_KNOWLEDGE_UPDATE_SYSTEM,
+    DOMAIN_KNOWLEDGE_UPDATE_USER,
+)
 from synapse.config import OntologyRegistry, Settings
 from synapse.extraction.discovery import discover_ontology_gaps
 from synapse.extraction.entities import extract_entities
@@ -226,6 +230,108 @@ def _make_rel(subj: Entity, predicate: str, obj: Entity, source_doc: str) -> Rel
     )
 
 
+# ── Domain knowledge context update ──────────────────────────
+
+_MAX_ENTITY_SAMPLES_PER_TYPE = 8
+
+
+async def update_domain_knowledge_context(
+    document_title: str,
+    entities: list[Entity],
+    relationships: list[Relationship],
+    llm: LLMClient,
+    store: InstanceStore,
+) -> None:
+    """Update the domain knowledge context with insights from a processed document.
+
+    Skips the LLM call if a heuristic check suggests no new knowledge.
+    """
+    existing_context = store.get_prompt("domain_knowledge_context")
+    if not existing_context:
+        return
+
+    # Heuristic: check if extracted entity types are already well-represented
+    entity_types_seen = {e.entity_type for e in entities}
+    existing_lower = existing_context.lower()
+    known_count = sum(1 for t in entity_types_seen if t.lower() in existing_lower)
+    if entity_types_seen and known_count / len(entity_types_seen) > 0.8:
+        # Also check entity names — if most top names are already mentioned, skip
+        sample_names = [e.text for e in entities[:30]]
+        name_hits = sum(1 for n in sample_names if n.lower() in existing_lower)
+        if sample_names and name_hits / len(sample_names) > 0.5:
+            logger.debug(
+                "Domain knowledge context already covers document '%s', skipping update",
+                document_title,
+            )
+            return
+
+    # Build entity summary (grouped by type, sampled)
+    by_type: dict[str, list[str]] = defaultdict(list)
+    for e in entities:
+        by_type[e.entity_type].append(e.text)
+    summary_lines: list[str] = []
+    for etype, names in sorted(by_type.items()):
+        shown = names[:_MAX_ENTITY_SAMPLES_PER_TYPE]
+        suffix = f" ... (+{len(names) - len(shown)} more)" if len(names) > len(shown) else ""
+        summary_lines.append(f"{etype}: {', '.join(shown)}{suffix}")
+    entity_summary = "\n".join(summary_lines)
+
+    # Build relationship summary (sampled)
+    rel_lines: list[str] = []
+    for r in relationships[:40]:
+        rel_lines.append(f"{r.subject} —[{r.predicate}]→ {r.object}")
+    relationship_summary = "\n".join(rel_lines) if rel_lines else "(none)"
+
+    try:
+        result = await llm.complete(
+            system=DOMAIN_KNOWLEDGE_UPDATE_SYSTEM,
+            user=DOMAIN_KNOWLEDGE_UPDATE_USER.format(
+                existing_context=existing_context,
+                document_title=document_title,
+                entity_summary=entity_summary,
+                relationship_summary=relationship_summary,
+            ),
+            max_tokens=4096,
+        )
+    except Exception as e:
+        logger.error("Domain knowledge context update LLM call failed: %s", e)
+        return
+
+    updated = result.strip()
+    if not updated:
+        return
+
+    # If LLM returned JSON, extract string
+    if updated.startswith(("{", '"')):
+        try:
+            import json
+
+            parsed = json.loads(updated)
+            if isinstance(parsed, str):
+                updated = parsed
+            elif isinstance(parsed, dict):
+                for key in ("context", "domain_knowledge", "text", "result"):
+                    if key in parsed and isinstance(parsed[key], str):
+                        updated = parsed[key]
+                        break
+        except json.JSONDecodeError:
+            pass
+
+    # Skip write if unchanged
+    if updated.strip() == existing_context.strip():
+        logger.debug("Domain knowledge context unchanged after document '%s'", document_title)
+        return
+
+    version_id = store.get_active_version_id()
+    if version_id:
+        store.store_prompt(version_id, "domain_knowledge_context", updated)
+        logger.info(
+            "Updated domain knowledge context after document '%s' (%d chars)",
+            document_title,
+            len(updated),
+        )
+
+
 async def process_section(
     section: Section,
     llm: LLMClient,
@@ -400,6 +506,19 @@ async def process_document(
             len(all_entities),
             len(all_relationships),
         )
+
+    # Step 6: Update domain knowledge context
+    if store and not dry_run:
+        try:
+            await update_domain_knowledge_context(
+                document_title=doc.title,
+                entities=all_entities,
+                relationships=all_relationships,
+                llm=llm,
+                store=store,
+            )
+        except Exception as e:
+            logger.warning("Domain knowledge context update failed: %s", e)
 
     return doc, all_entities, all_relationships
 

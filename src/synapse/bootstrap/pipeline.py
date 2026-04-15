@@ -22,6 +22,8 @@ from synapse.bootstrap.prompts import (
     BOILERPLATE_KEYWORDS_DISCOVERY_USER,
     DOMAIN_ANALYSIS_SYSTEM,
     DOMAIN_ANALYSIS_USER,
+    DOMAIN_KNOWLEDGE_GENERATION_SYSTEM,
+    DOMAIN_KNOWLEDGE_GENERATION_USER,
     ONTOLOGY_DISCOVERY_INCREMENTAL_USER,
     ONTOLOGY_DISCOVERY_SYSTEM,
     ONTOLOGY_DISCOVERY_USER,
@@ -158,6 +160,48 @@ async def refine_ontology(
     return result
 
 
+async def generate_domain_knowledge_context(
+    sample_text: str,
+    domain: str,
+    subdomain: str,
+    language: str,
+    key_topics: list[str],
+    llm: LLMClient,
+) -> str:
+    """Generate a domain knowledge context from sample pages.
+
+    Returns plain-text summary of cross-document domain knowledge
+    (terminology, standards, conventions, naming patterns).
+    """
+    result = await llm.complete(
+        system=DOMAIN_KNOWLEDGE_GENERATION_SYSTEM,
+        user=DOMAIN_KNOWLEDGE_GENERATION_USER.format(
+            domain=domain,
+            subdomain=subdomain,
+            language=language,
+            key_topics=", ".join(key_topics),
+            sample_text=sample_text,
+        ),
+        max_tokens=4096,
+    )
+    text = result.strip()
+    # If LLM wrapped the response in JSON, extract the string
+    if text.startswith(("{", '"')):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, str):
+                text = parsed
+            elif isinstance(parsed, dict):
+                for key in ("context", "domain_knowledge", "text", "result"):
+                    if key in parsed and isinstance(parsed[key], str):
+                        text = parsed[key]
+                        break
+        except json.JSONDecodeError:
+            pass
+    logger.info("Generated domain knowledge context (%d chars)", len(text))
+    return text
+
+
 async def generate_prompts(
     entity_types: dict[str, str],
     relationship_types: dict[str, str],
@@ -271,7 +315,7 @@ async def bootstrap(
     sample_text = _sample_pages(all_pages, max_pages=settings.bootstrap_sample_pages)
 
     # ── 3. Analyze domain ─────────────────────────────────────
-    logger.info("Step 1/5: Analyzing domain...")
+    logger.info("Step 1/6: Analyzing domain...")
     domain_info = await analyze_domain(sample_text, llm)
     domain = domain_info.get("domain", "general")
     subdomain = domain_info.get("subdomain", "")
@@ -286,7 +330,7 @@ async def bootstrap(
     )
 
     # ── 4. Discover ontology (may run multiple rounds for large batches) ─
-    logger.info("Step 2/5: Discovering ontology...")
+    logger.info("Step 2/6: Discovering ontology...")
 
     # First round with initial sample
     ontology = await discover_ontology(
@@ -317,7 +361,7 @@ async def bootstrap(
         relationship_types = ontology2.get("relationship_types", relationship_types)
 
     # ── 5. Refine ontology ────────────────────────────────────
-    logger.info("Step 3/5: Refining ontology...")
+    logger.info("Step 3/6: Refining ontology...")
     refined = await refine_ontology(
         entity_types=entity_types,
         relationship_types=relationship_types,
@@ -330,8 +374,19 @@ async def bootstrap(
     entity_types = refined.get("entity_types", entity_types)
     relationship_types = refined.get("relationship_types", relationship_types)
 
+    # ── 5b. Generate domain knowledge context ──────────────────
+    logger.info("Step 3b/6: Generating domain knowledge context...")
+    domain_knowledge_text = await generate_domain_knowledge_context(
+        sample_text=sample_text,
+        domain=domain,
+        subdomain=subdomain,
+        language=language,
+        key_topics=key_topics,
+        llm=llm,
+    )
+
     # ── 6. Generate prompts ───────────────────────────────────
-    logger.info("Step 4/5: Generating domain-specific prompts...")
+    logger.info("Step 4/6: Generating domain-specific prompts...")
     prompts = await generate_prompts(
         entity_types=entity_types,
         relationship_types=relationship_types,
@@ -343,7 +398,7 @@ async def bootstrap(
     )
 
     # ── 7. Discover boilerplate keywords ──────────────────────
-    logger.info("Step 5/5: Discovering boilerplate keywords...")
+    logger.info("Step 5/6: Discovering boilerplate keywords...")
     boilerplate = await discover_boilerplate_keywords(domain, document_types, llm)
 
     # ── 8. Store everything in SQLite ─────────────────────────
@@ -359,6 +414,15 @@ async def bootstrap(
     store.store_entity_types_batch(version_id, entity_types)
     store.store_relationship_types_batch(version_id, relationship_types)
     store.store_prompts_batch(version_id, prompts)
+
+    # Store domain knowledge context
+    if domain_knowledge_text:
+        store.store_prompt(
+            version_id,
+            "domain_knowledge_context",
+            domain_knowledge_text,
+            description="Cross-document domain knowledge for extraction prompts",
+        )
 
     # Store boilerplate keywords as a special prompt
     store.store_prompt(

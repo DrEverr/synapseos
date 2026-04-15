@@ -288,3 +288,75 @@ Return a JSON array of lowercase keywords/phrases that indicate boilerplate sect
 Example: ["legal", "disclaimer", "copyright", "index", "bibliography", "about the author"]
 
 Return ONLY the JSON array, nothing else."""
+
+
+# ═══════════════════════════════════════════════════════════════
+# Step 5b: Domain Knowledge Context Generation
+# ═══════════════════════════════════════════════════════════════
+
+DOMAIN_KNOWLEDGE_GENERATION_SYSTEM = (
+    "You are a domain knowledge summarization expert. You create concise reference "
+    "guides that capture the essential background knowledge needed to understand "
+    "technical documents in a specific field."
+)
+
+DOMAIN_KNOWLEDGE_GENERATION_USER = """Analyze the following sample pages from {domain} ({subdomain}) documents
+written in {language}, covering topics: {key_topics}.
+
+Create a concise DOMAIN KNOWLEDGE CONTEXT that captures cross-document knowledge
+a human expert would have but that may not be explained in any single document.
+
+Include:
+1. TERMINOLOGY & ABBREVIATIONS: Key abbreviations, acronyms, and domain-specific
+   terms with their definitions and full forms
+2. STANDARDS & CONVENTIONS: Industry standards, classification systems, and
+   normative references mentioned or implied
+3. IMPLICIT RELATIONSHIPS: Concepts that documents assume the reader already
+   knows are connected (e.g., material codes imply properties, product families
+   share base characteristics)
+4. NAMING PATTERNS: Systematic naming conventions, numbering schemes, product
+   code structures
+
+Keep the context under 2500 tokens. Be factual and specific — include actual
+values, codes, and definitions found in the documents. Do not include generic
+domain knowledge that any LLM would already know.
+
+SAMPLE PAGES:
+{sample_text}
+
+Return the domain knowledge context as plain text (NOT JSON). Use clear
+headers and bullet points for readability."""
+
+
+# ═══════════════════════════════════════════════════════════════
+# Step 5c: Domain Knowledge Context Update (after document processing)
+# ═══════════════════════════════════════════════════════════════
+
+DOMAIN_KNOWLEDGE_UPDATE_SYSTEM = (
+    "You are a domain knowledge curator. You update a domain knowledge reference "
+    "with new insights discovered from processing a document."
+)
+
+DOMAIN_KNOWLEDGE_UPDATE_USER = """A document has been processed and yielded the following extracted knowledge.
+Update the existing domain knowledge context with any NEW insights.
+
+EXISTING DOMAIN KNOWLEDGE CONTEXT:
+{existing_context}
+
+NEWLY PROCESSED DOCUMENT: "{document_title}"
+
+EXTRACTED ENTITIES (by type):
+{entity_summary}
+
+KEY RELATIONSHIPS:
+{relationship_summary}
+
+RULES:
+1. KEEP all existing knowledge unless it is factually incorrect
+2. ADD new abbreviations, terminology, standards, or conventions discovered
+3. ADD new implicit relationships or naming patterns observed
+4. Do NOT add entity-specific facts — only add knowledge that would help
+   interpret OTHER documents (cross-document knowledge)
+5. Keep the total context under 2500 tokens
+6. If there is nothing new to add, return the existing context UNCHANGED
+7. Return the COMPLETE updated context as plain text (NOT JSON)"""
