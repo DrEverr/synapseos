@@ -44,7 +44,8 @@ def repair_and_parse_json(text: str) -> dict | list:
     best: dict | list | None = None
     best_len = 0
 
-    for start_char, end_char in [("{", "}"), ("[", "]")]:
+    # Try arrays first — extraction calls almost always expect a list
+    for start_char, end_char in [("[", "]"), ("{", "}")]:
         start_idx = fixed.find(start_char)
         while start_idx != -1:
             # Find matching end bracket by counting

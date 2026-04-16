@@ -101,9 +101,17 @@ async def extract_relationships(
             relationship_types=ontology.format_relationship_types(),
         )
 
+    # Domain knowledge context injection
+    domain_context = store.get_prompt("domain_knowledge_context") if store else None
+    if domain_context:
+        user_prompt = (
+            "DOMAIN KNOWLEDGE CONTEXT (use this to interpret abbreviations, "
+            "terminology, and conventions):\n" + domain_context + "\n\n" + user_prompt
+        )
+
     try:
         result = await llm.complete_json_lenient(
-            system=system_prompt, user=user_prompt, max_tokens=4096
+            system=system_prompt, user=user_prompt, max_tokens=8192
         )
     except Exception:
         logger.error("Relationship extraction failed for section '%s'", section.title)
@@ -115,7 +123,11 @@ async def extract_relationships(
                 result = result[key]
                 break
         else:
-            result = []
+            # Single relationship dict — wrap in list
+            if "subject" in result or "predicate" in result:
+                result = [result]
+            else:
+                result = []
 
     relationships: list[Relationship] = []
 

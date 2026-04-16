@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://openrouter.ai/api/v1"
     llm_model: str = "openrouter/auto"
     llm_temperature: float = 0.0
-    llm_max_tokens: int = 4096
+    llm_max_tokens: int = 8192
     llm_timeout: float = 180
 
     # Per-phase model overrides (fall back to llm_model if empty)
