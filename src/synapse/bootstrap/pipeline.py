@@ -76,15 +76,15 @@ def _sample_pages(all_pages: list[list[str]], max_pages: int = 30) -> str:
 
 
 _NUMERIC_HINTS = (
-    "vikt", "weight", "kg", "flöde", "flow", "m³/h", "m3/h",
-    "bredd", "höjd", "längd", "width", "height", "length", "depth",
-    "djup", "mm", "cm", "capacity", "kapacitet", "tryck", "pressure",
-    "pa", "kpa", "area", "yta", "m²", "m2", "antal", "count",
+    "weight", "kg", "flow", "m³/h", "m3/h", "width", "height", "length",
+    "depth", "mm", "cm", "capacity", "pressure", "pa", "kpa", "area",
+    "m²", "m2", "count", "quantity", "volume", "speed", "power", "kw",
+    "temperature", "°c", "rating", "score", "cost", "price",
 )
 _IDENTIFIER_HINTS = (
-    "storlek", "size", "typ", "type", "modul", "module", "material",
-    "klass", "class", "beteckning", "designation", "artikel", "article",
-    "modell", "model", "namn", "name", "variant",
+    "size", "type", "module", "material", "class", "designation",
+    "article", "model", "name", "variant", "category", "code", "id",
+    "label", "grade", "series", "version",
 )
 
 
