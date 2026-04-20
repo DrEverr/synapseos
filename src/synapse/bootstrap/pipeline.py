@@ -33,6 +33,7 @@ from synapse.bootstrap.prompts import (
     PROMPT_GENERATION_USER,
 )
 from synapse.config import Settings
+from synapse.extraction.tables import parse_md_tables
 from synapse.llm.client import LLMClient
 from synapse.parsers import extract_pages
 from synapse.parsers.pdf import pages_to_tagged_text
@@ -74,6 +75,76 @@ def _sample_pages(all_pages: list[list[str]], max_pages: int = 30) -> str:
     return "\n\n".join(parts)
 
 
+_NUMERIC_HINTS = (
+    "vikt", "weight", "kg", "flöde", "flow", "m³/h", "m3/h",
+    "bredd", "höjd", "längd", "width", "height", "length", "depth",
+    "djup", "mm", "cm", "capacity", "kapacitet", "tryck", "pressure",
+    "pa", "kpa", "area", "yta", "m²", "m2", "antal", "count",
+)
+_IDENTIFIER_HINTS = (
+    "storlek", "size", "typ", "type", "modul", "module", "material",
+    "klass", "class", "beteckning", "designation", "artikel", "article",
+    "modell", "model", "namn", "name", "variant",
+)
+
+
+def extract_table_schemas(sample_text: str) -> str:
+    """Extract table column structures from sample pages.
+
+    Parses markdown tables from the sampled text and builds a TABLE SCHEMAS
+    summary that tells the ontology discovery LLM which columns exist and
+    whether they are numeric dimensions or identifiers.
+    """
+    import re as _re
+
+    # Split by page tags to get individual page texts
+    page_blocks = _re.split(r"</?page_\d+>", sample_text)
+
+    schemas: list[tuple[list[str], int]] = []  # (columns, total_rows)
+    seen_sigs: dict[str, int] = {}  # col_signature → index in schemas
+
+    for block in page_blocks:
+        tables = parse_md_tables(block)
+        for t in tables:
+            if len(t["rows"]) < 2:
+                continue
+            sig = "|".join(c.lower().strip() for c in t["columns"])
+            if sig in seen_sigs:
+                idx = seen_sigs[sig]
+                old_cols, old_rows = schemas[idx]
+                schemas[idx] = (old_cols, old_rows + len(t["rows"]))
+            else:
+                seen_sigs[sig] = len(schemas)
+                schemas.append((t["columns"], len(t["rows"])))
+
+    if not schemas:
+        return ""
+
+    lines = [
+        "TABLE SCHEMAS FOUND IN DOCUMENTS:",
+        "Each column header below is a candidate for a property or relationship type.",
+        "",
+    ]
+
+    for cols, row_count in sorted(schemas, key=lambda x: -x[1]):
+        lines.append(f"Table ({row_count} data rows):")
+        lines.append(f"  Columns: {' | '.join(cols)}")
+        for col in cols:
+            col_lower = col.lower()
+            if any(h in col_lower for h in _NUMERIC_HINTS):
+                lines.append(f"    → NUMERIC: '{col}' — candidate for a HAS_* relationship type")
+            elif any(h in col_lower for h in _IDENTIFIER_HINTS):
+                lines.append(f"    → IDENTIFIER: '{col}' — should be part of entity text")
+        lines.append("")
+
+    lines.append(
+        "For each NUMERIC column, create a relationship type (e.g. HAS_WEIGHT, "
+        "HAS_RATED_AIRFLOW). For IDENTIFIER columns, ensure the entity type "
+        "description mandates including that value in the entity text."
+    )
+    return "\n".join(lines)
+
+
 async def analyze_domain(
     sample_text: str,
     llm: LLMClient,
@@ -97,6 +168,7 @@ async def discover_ontology(
     max_rel_types: int = 20,
     existing_entity_types: dict[str, str] | None = None,
     existing_relationship_types: dict[str, str] | None = None,
+    table_schemas: str = "",
 ) -> dict:
     """Step 2: Discover entity types and relationship types from document samples."""
     if existing_entity_types:
@@ -106,6 +178,7 @@ async def discover_ontology(
             existing_entity_types=json.dumps(existing_entity_types, indent=2),
             existing_relationship_types=json.dumps(existing_relationship_types or {}, indent=2),
             sample_text=sample_text,
+            table_schemas=table_schemas,
             max_entity_types=max_entity_types,
             max_rel_types=max_rel_types,
         )
@@ -113,6 +186,7 @@ async def discover_ontology(
         user = ONTOLOGY_DISCOVERY_USER.format(
             domain_context=domain_context,
             sample_text=sample_text,
+            table_schemas=table_schemas,
             max_entity_types=max_entity_types,
             max_rel_types=max_rel_types,
         )
@@ -138,6 +212,7 @@ async def refine_ontology(
     llm: LLMClient,
     max_entity_types: int = 15,
     max_rel_types: int = 20,
+    table_schemas: str = "",
 ) -> dict:
     """Step 3: Refine and finalize the discovered ontology."""
     result = await llm.complete_json_lenient(
@@ -147,6 +222,7 @@ async def refine_ontology(
             entity_types=json.dumps(entity_types, indent=2),
             relationship_types=json.dumps(relationship_types, indent=2),
             key_topics=", ".join(key_topics),
+            table_schemas=table_schemas,
             max_entity_types=max_entity_types,
             max_rel_types=max_rel_types,
         ),
@@ -329,6 +405,11 @@ async def bootstrap(
         + (f" Underlying scientific aspects: {', '.join(scientific_aspects)}." if scientific_aspects else "")
     )
 
+    # ── 3b. Extract table schemas from sampled pages ────────────
+    table_schemas = extract_table_schemas(sample_text)
+    if table_schemas:
+        logger.info("Found table schemas in sample pages — will inform ontology discovery")
+
     # ── 4. Discover ontology (may run multiple rounds for large batches) ─
     logger.info("Step 2/6: Discovering ontology...")
 
@@ -339,6 +420,7 @@ async def bootstrap(
         llm=llm,
         max_entity_types=settings.bootstrap_max_entity_types,
         max_rel_types=settings.bootstrap_max_rel_types,
+        table_schemas=table_schemas,
     )
     entity_types = ontology.get("entity_types", {})
     relationship_types = ontology.get("relationship_types", {})
@@ -348,6 +430,7 @@ async def bootstrap(
         # Sample different pages for a second pass
         random.seed(42)  # Reproducible but different from first sample
         second_sample = _sample_pages(all_pages, max_pages=settings.bootstrap_sample_pages)
+        second_table_schemas = extract_table_schemas(second_sample)
         ontology2 = await discover_ontology(
             sample_text=second_sample,
             domain_context=domain_context,
@@ -356,6 +439,7 @@ async def bootstrap(
             max_rel_types=settings.bootstrap_max_rel_types,
             existing_entity_types=entity_types,
             existing_relationship_types=relationship_types,
+            table_schemas=second_table_schemas or table_schemas,
         )
         entity_types = ontology2.get("entity_types", entity_types)
         relationship_types = ontology2.get("relationship_types", relationship_types)
@@ -370,6 +454,7 @@ async def bootstrap(
         llm=llm,
         max_entity_types=settings.bootstrap_max_entity_types,
         max_rel_types=settings.bootstrap_max_rel_types,
+        table_schemas=table_schemas,
     )
     entity_types = refined.get("entity_types", entity_types)
     relationship_types = refined.get("relationship_types", relationship_types)
