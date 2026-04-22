@@ -66,6 +66,8 @@ def detect_tables(text: str) -> list[dict]:
       end      – line index after the last data row
       rows     – list of data-row strings (without header/separator)
     """
+    # Strip <page_N> / </page_N> tags added by the structure parser
+    text = re.sub(r"</?page_\d+>", "", text)
     lines = text.splitlines()
     tables: list[dict] = []
     i = 0
@@ -244,6 +246,7 @@ async def extract_entities(
 
     # Table-aware prompt augmentation
     tables = detect_tables(section.text)
+    total_rows = 0
     if tables:
         total_rows = sum(t["row_count"] for t in tables)
         table_hint = (
@@ -254,7 +257,11 @@ async def extract_entities(
         )
         user_prompt = table_hint + user_prompt
 
-    max_tokens = 8192
+    # Scale max_tokens with table size — each row needs ~200 tokens of JSON output
+    if total_rows > 15:
+        max_tokens = min(16384, 8192 + total_rows * 200)
+    else:
+        max_tokens = 8192
 
     try:
         result = await llm.complete_json_lenient(

@@ -860,8 +860,12 @@ async def reason_full(
 
         if tool in ("FIND", "DETAILS", "RELATED", "COMPARE", "LIST", "SCHEMA"):
             from synapse.tools.graph_tools import execute_tool
-            result_text = execute_tool(tool, args, graph)
-            if "no " in result_text.lower()[:20] or "not found" in result_text.lower():
+            try:
+                result_text = execute_tool(tool, args, graph)
+            except Exception as e:
+                result_text = f"(tool error: {e})"
+                logger.warning("Tool %s(%s) raised: %s", tool, args, e)
+            if "no " in result_text.lower()[:20] or "not found" in result_text.lower() or "error" in result_text.lower()[:20]:
                 empty_result_count += 1
                 total_empty_results += 1
             else:

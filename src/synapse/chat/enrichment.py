@@ -118,13 +118,16 @@ async def enrich_graph_from_answer(
             )
             continue
 
+        props = raw.get("properties", {})
+        if not isinstance(props, dict):
+            props = {}
         entity = Entity(
             text=text,
             entity_type=etype,
             canonical_name=normalize_entity_name(text),
             confidence=confidence,
             source_doc="chat:enrichment",
-            properties=raw.get("properties", {}),
+            properties=props,
             source_text=raw.get("source_text", ""),
             verified=False,
         )

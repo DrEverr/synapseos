@@ -284,6 +284,9 @@ IMPORTANT RULES:
   This is essential because entities are stored via MERGE on their text — if the value is only
   in "properties" dict, multiple subjects sharing the same property name will collapse into
   one node and all values except the first will be lost.
+- CRITICAL for enrichment prompts: the enrichment_user prompt MUST require a "source_text"
+  field in both entities and relationships JSON schemas — the exact sentence from the answer
+  that supports the extraction (copied verbatim). This enables traceability in the review UI.
 
 Return the JSON object with all 10 prompt keys. Return ONLY the JSON, nothing else."""
 
@@ -375,3 +378,20 @@ RULES:
 5. Keep the total context under 2500 tokens
 6. If there is nothing new to add, return the existing context UNCHANGED
 7. Return the COMPLETE updated context as plain text (NOT JSON)"""
+
+
+CONTRADICTION_SYSTEM = "You are an ontology expert. Your task is to identify contradictory relationship types."
+
+CONTRADICTION_USER = """Given the following relationship types from a domain ontology, identify pairs that are logically contradictory or mutually exclusive — i.e., if relationship A holds between two entities, relationship B cannot hold between the same pair.
+
+RELATIONSHIP TYPES:
+{relationship_types}
+
+Return a JSON array of pairs. Each pair is a two-element array [TYPE_A, TYPE_B].
+Only include pairs where the contradiction is clear and semantically grounded.
+Return [] if no contradictions are found.
+
+Example output:
+[["COMPATIBLE_WITH", "INCOMPATIBLE_WITH"], ["CAUSES", "PROTECTS_AGAINST"]]
+
+Return ONLY the JSON array, nothing else."""

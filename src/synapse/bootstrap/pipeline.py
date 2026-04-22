@@ -20,6 +20,8 @@ from pathlib import Path
 from synapse.bootstrap.prompts import (
     BOILERPLATE_KEYWORDS_DISCOVERY_SYSTEM,
     BOILERPLATE_KEYWORDS_DISCOVERY_USER,
+    CONTRADICTION_SYSTEM,
+    CONTRADICTION_USER,
     DOMAIN_ANALYSIS_SYSTEM,
     DOMAIN_ANALYSIS_USER,
     DOMAIN_KNOWLEDGE_GENERATION_SYSTEM,
@@ -323,6 +325,28 @@ async def generate_prompts(
     return {k: str(v) for k, v in result.items()}
 
 
+async def detect_contradiction_pairs(
+    relationship_types: dict[str, str],
+    llm: LLMClient,
+) -> list[list[str]]:
+    """Detect contradictory relationship pairs from the ontology using LLM."""
+    rel_list = "\n".join(f"- {k}: {v}" for k, v in sorted(relationship_types.items()))
+    try:
+        result = await llm.complete_json_lenient(
+            system=CONTRADICTION_SYSTEM,
+            user=CONTRADICTION_USER.format(relationship_types=rel_list),
+            max_tokens=1024,
+        )
+        if isinstance(result, list):
+            pairs = [[str(p[0]), str(p[1])] for p in result if isinstance(p, list) and len(p) == 2]
+            logger.info("Detected %d contradiction pair(s)", len(pairs))
+            return pairs
+        return []
+    except Exception as e:
+        logger.warning("Contradiction pair detection failed: %s", e)
+        return []
+
+
 async def discover_boilerplate_keywords(
     domain: str,
     document_types: list[str],
@@ -486,6 +510,10 @@ async def bootstrap(
     logger.info("Step 5/6: Discovering boilerplate keywords...")
     boilerplate = await discover_boilerplate_keywords(domain, document_types, llm)
 
+    # ── 7b. Detect contradiction pairs ────────────────────────
+    logger.info("Step 5b/6: Detecting contradictory relationship pairs...")
+    contradiction_pairs = await detect_contradiction_pairs(relationship_types, llm)
+
     # ── 8. Store everything in SQLite ─────────────────────────
     logger.info("Storing ontology, prompts, and metadata in instance store...")
 
@@ -498,6 +526,8 @@ async def bootstrap(
 
     store.store_entity_types_batch(version_id, entity_types)
     store.store_relationship_types_batch(version_id, relationship_types)
+    if contradiction_pairs:
+        store.store_contradiction_pairs(version_id, contradiction_pairs)
     store.store_prompts_batch(version_id, prompts)
 
     # Store domain knowledge context

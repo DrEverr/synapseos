@@ -33,11 +33,14 @@ def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, APIStatusError):
         # Any other HTTP error (400, 401, 403, 404, 402, …) is permanent
         return False
-    if isinstance(exc, (APIConnectionError, APITimeoutError)):
-        # Network/timeout issues are transient
+    if isinstance(exc, APIConnectionError):
+        # Network connection issues are transient
         return True
-    if isinstance(exc, (asyncio.TimeoutError, ConnectionError, OSError)):
-        # Low-level network/timeout errors are transient
+    if isinstance(exc, (APITimeoutError, asyncio.TimeoutError)):
+        # Timeout — server is too slow; retrying will just time out again
+        return False
+    if isinstance(exc, (ConnectionError, OSError)):
+        # Low-level network errors are transient
         return True
     # Unknown exceptions — don't retry (fail fast)
     return False
@@ -81,7 +84,8 @@ class LLMClient:
         self.model = model
         self.timeout = timeout
         # Disable the SDK's built-in retries — tenacity handles retry logic
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+        # Set httpx-level timeout so the HTTP connection is actually aborted on timeout
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0, timeout=timeout)
 
     async def close(self) -> None:
         """Close the underlying HTTP client to avoid event-loop-closed errors."""

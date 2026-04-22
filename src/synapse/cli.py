@@ -576,19 +576,7 @@ def inspect(
         return
 
     if conflicts:
-        rules_path = Path(__file__).resolve().parent.parent.parent / "config" / "conflict_rules.json"
-        rules: list[list[str]] = []
-        if rules_path.exists():
-            rules_data = json.loads(rules_path.read_text())
-            rules = rules_data.get("contradictory_pairs", [])
-        else:
-            # Hardcoded defaults
-            rules = [
-                ["CAUSES", "PROTECTS_AGAINST"],
-                ["COMPATIBLE_WITH", "INCOMPATIBLE_WITH"],
-                ["SUITABLE_FOR", "INEFFECTIVE_AGAINST"],
-                ["VULNERABLE_TO", "PROTECTS_AGAINST"],
-            ]
+        rules = ontology.get_contradiction_pairs()
         found = graph.find_conflicts(rules)
         if found:
             click.echo(f"Conflicting relationships ({len(found)}):")
