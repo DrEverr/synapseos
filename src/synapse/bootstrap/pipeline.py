@@ -20,6 +20,8 @@ from pathlib import Path
 from synapse.bootstrap.prompts import (
     BOILERPLATE_KEYWORDS_DISCOVERY_SYSTEM,
     BOILERPLATE_KEYWORDS_DISCOVERY_USER,
+    CONTRADICTION_SYSTEM,
+    CONTRADICTION_USER,
     DOMAIN_ANALYSIS_SYSTEM,
     DOMAIN_ANALYSIS_USER,
     DOMAIN_KNOWLEDGE_GENERATION_SYSTEM,
@@ -33,6 +35,7 @@ from synapse.bootstrap.prompts import (
     PROMPT_GENERATION_USER,
 )
 from synapse.config import Settings
+from synapse.extraction.tables import parse_md_tables
 from synapse.llm.client import LLMClient
 from synapse.parsers import extract_pages
 from synapse.parsers.pdf import pages_to_tagged_text
@@ -74,6 +77,76 @@ def _sample_pages(all_pages: list[list[str]], max_pages: int = 30) -> str:
     return "\n\n".join(parts)
 
 
+_NUMERIC_HINTS = (
+    "weight", "kg", "flow", "m³/h", "m3/h", "width", "height", "length",
+    "depth", "mm", "cm", "capacity", "pressure", "pa", "kpa", "area",
+    "m²", "m2", "count", "quantity", "volume", "speed", "power", "kw",
+    "temperature", "°c", "rating", "score", "cost", "price",
+)
+_IDENTIFIER_HINTS = (
+    "size", "type", "module", "material", "class", "designation",
+    "article", "model", "name", "variant", "category", "code", "id",
+    "label", "grade", "series", "version",
+)
+
+
+def extract_table_schemas(sample_text: str) -> str:
+    """Extract table column structures from sample pages.
+
+    Parses markdown tables from the sampled text and builds a TABLE SCHEMAS
+    summary that tells the ontology discovery LLM which columns exist and
+    whether they are numeric dimensions or identifiers.
+    """
+    import re as _re
+
+    # Split by page tags to get individual page texts
+    page_blocks = _re.split(r"</?page_\d+>", sample_text)
+
+    schemas: list[tuple[list[str], int]] = []  # (columns, total_rows)
+    seen_sigs: dict[str, int] = {}  # col_signature → index in schemas
+
+    for block in page_blocks:
+        tables = parse_md_tables(block)
+        for t in tables:
+            if len(t["rows"]) < 2:
+                continue
+            sig = "|".join(c.lower().strip() for c in t["columns"])
+            if sig in seen_sigs:
+                idx = seen_sigs[sig]
+                old_cols, old_rows = schemas[idx]
+                schemas[idx] = (old_cols, old_rows + len(t["rows"]))
+            else:
+                seen_sigs[sig] = len(schemas)
+                schemas.append((t["columns"], len(t["rows"])))
+
+    if not schemas:
+        return ""
+
+    lines = [
+        "TABLE SCHEMAS FOUND IN DOCUMENTS:",
+        "Each column header below is a candidate for a property or relationship type.",
+        "",
+    ]
+
+    for cols, row_count in sorted(schemas, key=lambda x: -x[1]):
+        lines.append(f"Table ({row_count} data rows):")
+        lines.append(f"  Columns: {' | '.join(cols)}")
+        for col in cols:
+            col_lower = col.lower()
+            if any(h in col_lower for h in _NUMERIC_HINTS):
+                lines.append(f"    → NUMERIC: '{col}' — candidate for a HAS_* relationship type")
+            elif any(h in col_lower for h in _IDENTIFIER_HINTS):
+                lines.append(f"    → IDENTIFIER: '{col}' — should be part of entity text")
+        lines.append("")
+
+    lines.append(
+        "For each NUMERIC column, create a relationship type (e.g. HAS_WEIGHT, "
+        "HAS_RATED_AIRFLOW). For IDENTIFIER columns, ensure the entity type "
+        "description mandates including that value in the entity text."
+    )
+    return "\n".join(lines)
+
+
 async def analyze_domain(
     sample_text: str,
     llm: LLMClient,
@@ -97,6 +170,7 @@ async def discover_ontology(
     max_rel_types: int = 20,
     existing_entity_types: dict[str, str] | None = None,
     existing_relationship_types: dict[str, str] | None = None,
+    table_schemas: str = "",
 ) -> dict:
     """Step 2: Discover entity types and relationship types from document samples."""
     if existing_entity_types:
@@ -106,6 +180,7 @@ async def discover_ontology(
             existing_entity_types=json.dumps(existing_entity_types, indent=2),
             existing_relationship_types=json.dumps(existing_relationship_types or {}, indent=2),
             sample_text=sample_text,
+            table_schemas=table_schemas,
             max_entity_types=max_entity_types,
             max_rel_types=max_rel_types,
         )
@@ -113,6 +188,7 @@ async def discover_ontology(
         user = ONTOLOGY_DISCOVERY_USER.format(
             domain_context=domain_context,
             sample_text=sample_text,
+            table_schemas=table_schemas,
             max_entity_types=max_entity_types,
             max_rel_types=max_rel_types,
         )
@@ -138,6 +214,7 @@ async def refine_ontology(
     llm: LLMClient,
     max_entity_types: int = 15,
     max_rel_types: int = 20,
+    table_schemas: str = "",
 ) -> dict:
     """Step 3: Refine and finalize the discovered ontology."""
     result = await llm.complete_json_lenient(
@@ -147,6 +224,7 @@ async def refine_ontology(
             entity_types=json.dumps(entity_types, indent=2),
             relationship_types=json.dumps(relationship_types, indent=2),
             key_topics=", ".join(key_topics),
+            table_schemas=table_schemas,
             max_entity_types=max_entity_types,
             max_rel_types=max_rel_types,
         ),
@@ -247,6 +325,28 @@ async def generate_prompts(
     return {k: str(v) for k, v in result.items()}
 
 
+async def detect_contradiction_pairs(
+    relationship_types: dict[str, str],
+    llm: LLMClient,
+) -> list[list[str]]:
+    """Detect contradictory relationship pairs from the ontology using LLM."""
+    rel_list = "\n".join(f"- {k}: {v}" for k, v in sorted(relationship_types.items()))
+    try:
+        result = await llm.complete_json_lenient(
+            system=CONTRADICTION_SYSTEM,
+            user=CONTRADICTION_USER.format(relationship_types=rel_list),
+            max_tokens=1024,
+        )
+        if isinstance(result, list):
+            pairs = [[str(p[0]), str(p[1])] for p in result if isinstance(p, list) and len(p) == 2]
+            logger.info("Detected %d contradiction pair(s)", len(pairs))
+            return pairs
+        return []
+    except Exception as e:
+        logger.warning("Contradiction pair detection failed: %s", e)
+        return []
+
+
 async def discover_boilerplate_keywords(
     domain: str,
     document_types: list[str],
@@ -329,6 +429,11 @@ async def bootstrap(
         + (f" Underlying scientific aspects: {', '.join(scientific_aspects)}." if scientific_aspects else "")
     )
 
+    # ── 3b. Extract table schemas from sampled pages ────────────
+    table_schemas = extract_table_schemas(sample_text)
+    if table_schemas:
+        logger.info("Found table schemas in sample pages — will inform ontology discovery")
+
     # ── 4. Discover ontology (may run multiple rounds for large batches) ─
     logger.info("Step 2/6: Discovering ontology...")
 
@@ -339,6 +444,7 @@ async def bootstrap(
         llm=llm,
         max_entity_types=settings.bootstrap_max_entity_types,
         max_rel_types=settings.bootstrap_max_rel_types,
+        table_schemas=table_schemas,
     )
     entity_types = ontology.get("entity_types", {})
     relationship_types = ontology.get("relationship_types", {})
@@ -348,6 +454,7 @@ async def bootstrap(
         # Sample different pages for a second pass
         random.seed(42)  # Reproducible but different from first sample
         second_sample = _sample_pages(all_pages, max_pages=settings.bootstrap_sample_pages)
+        second_table_schemas = extract_table_schemas(second_sample)
         ontology2 = await discover_ontology(
             sample_text=second_sample,
             domain_context=domain_context,
@@ -356,6 +463,7 @@ async def bootstrap(
             max_rel_types=settings.bootstrap_max_rel_types,
             existing_entity_types=entity_types,
             existing_relationship_types=relationship_types,
+            table_schemas=second_table_schemas or table_schemas,
         )
         entity_types = ontology2.get("entity_types", entity_types)
         relationship_types = ontology2.get("relationship_types", relationship_types)
@@ -370,6 +478,7 @@ async def bootstrap(
         llm=llm,
         max_entity_types=settings.bootstrap_max_entity_types,
         max_rel_types=settings.bootstrap_max_rel_types,
+        table_schemas=table_schemas,
     )
     entity_types = refined.get("entity_types", entity_types)
     relationship_types = refined.get("relationship_types", relationship_types)
@@ -401,6 +510,10 @@ async def bootstrap(
     logger.info("Step 5/6: Discovering boilerplate keywords...")
     boilerplate = await discover_boilerplate_keywords(domain, document_types, llm)
 
+    # ── 7b. Detect contradiction pairs ────────────────────────
+    logger.info("Step 5b/6: Detecting contradictory relationship pairs...")
+    contradiction_pairs = await detect_contradiction_pairs(relationship_types, llm)
+
     # ── 8. Store everything in SQLite ─────────────────────────
     logger.info("Storing ontology, prompts, and metadata in instance store...")
 
@@ -413,6 +526,8 @@ async def bootstrap(
 
     store.store_entity_types_batch(version_id, entity_types)
     store.store_relationship_types_batch(version_id, relationship_types)
+    if contradiction_pairs:
+        store.store_contradiction_pairs(version_id, contradiction_pairs)
     store.store_prompts_batch(version_id, prompts)
 
     # Store domain knowledge context

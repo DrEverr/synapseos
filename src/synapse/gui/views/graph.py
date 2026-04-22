@@ -683,24 +683,10 @@ class GraphInspectorView(QWidget):
             QMessageBox.warning(self, "Error", f"Cannot connect: {e}")
             return
 
-        from pathlib import Path
-        import json as _json
-        rules_path = Path(__file__).resolve().parent.parent.parent.parent / "config" / "conflict_rules.json"
-        rules: list[list[str]] = []
-        if rules_path.exists():
-            try:
-                rules_data = _json.loads(rules_path.read_text())
-                rules = rules_data.get("contradictory_pairs", [])
-            except (_json.JSONDecodeError, ValueError) as e:
-                logger.warning("Failed to parse %s: %s — using defaults", rules_path, e)
-                rules = []
-        if not rules:
-            rules = [
-                ["CAUSES", "PROTECTS_AGAINST"],
-                ["COMPATIBLE_WITH", "INCOMPATIBLE_WITH"],
-                ["SUITABLE_FOR", "INEFFECTIVE_AGAINST"],
-                ["VULNERABLE_TO", "PROTECTS_AGAINST"],
-            ]
+        store = self._bridge.get_store()
+        from synapse.config import OntologyRegistry
+        ontology = OntologyRegistry(store=store, ontology_name=self._bridge.settings.ontology)
+        rules = ontology.get_contradiction_pairs()
 
         conflicts = graph.find_conflicts(rules)
         self._conflicts_count.setText(

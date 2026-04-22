@@ -118,6 +118,25 @@ CREATE TABLE IF NOT EXISTS activity_log (
     item_detail      TEXT DEFAULT '',
     created_at       TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS extracted_tables (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_doc       TEXT NOT NULL,
+    source_section   TEXT DEFAULT '',
+    table_name       TEXT NOT NULL,
+    columns_json     TEXT NOT NULL,
+    created_at       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS extracted_table_rows (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    table_id         INTEGER NOT NULL REFERENCES extracted_tables(id),
+    row_index        INTEGER NOT NULL,
+    row_json         TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_table_rows_table_id ON extracted_table_rows(table_id);
+CREATE INDEX IF NOT EXISTS idx_extracted_tables_name ON extracted_tables(table_name);
 """
 
 
@@ -322,6 +341,55 @@ class InstanceStore:
             (vid,),
         ).fetchall()
         return {r["type_name"]: r["description"] for r in rows}
+
+    def store_contradiction_pairs(self, version_id: int, pairs: list[list[str]]) -> None:
+        """Store contradictory relationship pairs in the properties column of each type."""
+        for pair in pairs:
+            if len(pair) != 2:
+                continue
+            a, b = pair[0], pair[1]
+            for this, other in [(a, b), (b, a)]:
+                row = self._conn.execute(
+                    "SELECT properties FROM relationship_types WHERE version_id = ? AND type_name = ?",
+                    (version_id, this),
+                ).fetchone()
+                if row is None:
+                    continue
+                try:
+                    props = json.loads(row["properties"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    props = {}
+                props["contradicts"] = other
+                self._conn.execute(
+                    "UPDATE relationship_types SET properties = ? WHERE version_id = ? AND type_name = ?",
+                    (json.dumps(props, ensure_ascii=False), version_id, this),
+                )
+        self._conn.commit()
+
+    def get_contradiction_pairs(self, version_id: int | None = None) -> list[list[str]]:
+        """Return unique contradictory pairs [[A, B], ...] stored in relationship_types properties."""
+        vid = version_id or self.get_active_version_id()
+        if vid is None:
+            return []
+        rows = self._conn.execute(
+            "SELECT type_name, properties FROM relationship_types WHERE version_id = ?",
+            (vid,),
+        ).fetchall()
+        seen: set[frozenset] = set()
+        pairs: list[list[str]] = []
+        for row in rows:
+            try:
+                props = json.loads(row["properties"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            other = props.get("contradicts")
+            if not other:
+                continue
+            key = frozenset([row["type_name"], other])
+            if key not in seen:
+                seen.add(key)
+                pairs.append([row["type_name"], other])
+        return pairs
 
     # ── Prompts ───────────────────────────────────────────────
 
@@ -633,6 +701,116 @@ class InstanceStore:
             (action_type, action_id),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ── Extracted Tables (SQL store for tabular data) ──────────
+
+    def store_table(
+        self,
+        source_doc: str,
+        source_section: str,
+        table_name: str,
+        columns: list[str],
+        rows: list[dict[str, str]],
+    ) -> int:
+        """Store a parsed table with typed rows. Returns the table_id."""
+        now = datetime.now(timezone.utc).isoformat()
+        cur = self._conn.execute(
+            "INSERT INTO extracted_tables (source_doc, source_section, table_name, columns_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (source_doc, source_section, table_name, json.dumps(columns, ensure_ascii=False), now),
+        )
+        table_id = cur.lastrowid
+        assert table_id is not None
+        for idx, row in enumerate(rows):
+            self._conn.execute(
+                "INSERT INTO extracted_table_rows (table_id, row_index, row_json) VALUES (?, ?, ?)",
+                (table_id, idx, json.dumps(row, ensure_ascii=False)),
+            )
+        self._conn.commit()
+        logger.info("Stored table '%s' with %d rows (table_id=%d)", table_name, len(rows), table_id)
+        return table_id
+
+    def query_table(
+        self,
+        table_name: str,
+        filters: dict[str, str] | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Query rows from an extracted table, optionally filtering by column values."""
+        row = self._conn.execute(
+            "SELECT id, columns_json FROM extracted_tables WHERE table_name = ? ORDER BY id DESC LIMIT 1",
+            (table_name,),
+        ).fetchone()
+        if not row:
+            return []
+        table_id = row["id"]
+        columns = json.loads(row["columns_json"])
+
+        rows = self._conn.execute(
+            "SELECT row_json FROM extracted_table_rows WHERE table_id = ? ORDER BY row_index LIMIT ?",
+            (table_id, limit),
+        ).fetchall()
+
+        results = []
+        for r in rows:
+            row_data = json.loads(r["row_json"])
+            if filters:
+                match = all(
+                    str(row_data.get(k, "")).lower() == str(v).lower()
+                    for k, v in filters.items()
+                )
+                if not match:
+                    continue
+            results.append(row_data)
+        return results
+
+    def query_table_sql(self, table_name: str, where_clause: str = "", limit: int = 100) -> list[dict]:
+        """Query table rows with a flexible text-based filter on JSON fields.
+
+        *where_clause* is matched against row_json via LIKE for simple cases.
+        For structured queries, use query_table() with dict filters.
+        """
+        row = self._conn.execute(
+            "SELECT id FROM extracted_tables WHERE table_name = ? ORDER BY id DESC LIMIT 1",
+            (table_name,),
+        ).fetchone()
+        if not row:
+            return []
+        table_id = row["id"]
+
+        if where_clause:
+            rows = self._conn.execute(
+                "SELECT row_json FROM extracted_table_rows WHERE table_id = ? AND row_json LIKE ? ORDER BY row_index LIMIT ?",
+                (table_id, f"%{where_clause}%", limit),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT row_json FROM extracted_table_rows WHERE table_id = ? ORDER BY row_index LIMIT ?",
+                (table_id, limit),
+            ).fetchall()
+        return [json.loads(r["row_json"]) for r in rows]
+
+    def list_tables(self) -> list[dict[str, Any]]:
+        """List all extracted tables with row counts."""
+        rows = self._conn.execute(
+            "SELECT t.id, t.source_doc, t.source_section, t.table_name, t.columns_json, t.created_at, "
+            "  (SELECT COUNT(*) FROM extracted_table_rows r WHERE r.table_id = t.id) AS row_count "
+            "FROM extracted_tables t ORDER BY t.created_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_tables_for_doc(self, source_doc: str) -> int:
+        """Delete all extracted tables for a document (for re-ingest)."""
+        table_ids = self._conn.execute(
+            "SELECT id FROM extracted_tables WHERE source_doc = ?", (source_doc,)
+        ).fetchall()
+        count = 0
+        for tid in table_ids:
+            self._conn.execute("DELETE FROM extracted_table_rows WHERE table_id = ?", (tid["id"],))
+            count += 1
+        self._conn.execute("DELETE FROM extracted_tables WHERE source_doc = ?", (source_doc,))
+        self._conn.commit()
+        return count
 
     # ── Export / Import ───────────────────────────────────────
 

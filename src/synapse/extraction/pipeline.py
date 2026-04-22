@@ -341,46 +341,56 @@ async def process_section(
 ) -> tuple[list[Entity], list[Relationship]]:
     """Extract entities and relationships from a single section.
 
-    For sections containing large tables (>20 rows), splits the table into
-    batches and runs extraction on each batch.  After extraction, verifies
-    completeness against expected row count and retries once if <70%.
+    Tables are handled by deterministic parsing via :func:`process_section_tables`.
+    Non-table content goes through the standard LLM extraction pipeline.
+    Results are merged with dedup.
     """
-    from synapse.extraction.entities import detect_tables, split_table_section
+    from synapse.extraction.entities import detect_tables
+    from synapse.extraction.tables import process_section_tables
 
     tables = detect_tables(section.text)
+    total_table_rows = sum(t["row_count"] for t in tables) if tables else 0
 
-    if tables and any(t["row_count"] > 20 for t in tables):
-        sub_sections = split_table_section(section)
-        all_entities: list[Entity] = []
-        for sub in sub_sections:
-            ents = await extract_entities(sub, llm, ontology, document_title, store)
-            all_entities.extend(ents)
-        # Run relationship extraction ONCE on the full section with ALL entities
-        all_relationships = await extract_relationships(
-            section, all_entities, llm, ontology, document_title, store
+    all_entities: list[Entity] = []
+    all_relationships: list[Relationship] = []
+
+    # ── Table extraction (deterministic) ──
+    table_dominated = False
+    if tables and total_table_rows >= 3:
+        tbl_entities, tbl_rels = await process_section_tables(
+            section, document_title, store=store
+        )
+        all_entities.extend(tbl_entities)
+        all_relationships.extend(tbl_rels)
+        # If the section is mostly table data, skip redundant LLM extraction —
+        # the LLM would see the same rows and create duplicate entities with
+        # different text formats, defeating deterministic deduplication.
+        table_dominated = total_table_rows >= 10
+
+    # ── LLM extraction on full section (catches non-table content) ──
+    # Skipped for table-dominated sections to avoid duplicate entity names.
+    if not table_dominated:
+        llm_entities = await extract_entities(section, llm, ontology, document_title, store)
+        llm_rels = await extract_relationships(
+            section, llm_entities, llm, ontology, document_title, store
         )
     else:
-        all_entities = await extract_entities(section, llm, ontology, document_title, store)
-        all_relationships = await extract_relationships(
-            section, all_entities, llm, ontology, document_title, store
-        )
+        llm_entities = []
+        llm_rels = []
 
-    # Completeness verification for table sections (max 1 retry)
-    if tables:
-        expected_rows = sum(t["row_count"] for t in tables)
-        if expected_rows > 5 and len(all_entities) < expected_rows * 0.7:
-            logger.warning(
-                "Table completeness: %d entities for %d expected rows in '%s', retrying",
-                len(all_entities),
-                expected_rows,
-                section.title,
-            )
-            existing = {e.text.lower() for e in all_entities}
-            retry_ents = await extract_entities(section, llm, ontology, document_title, store)
-            for e in retry_ents:
-                if e.text.lower() not in existing:
-                    all_entities.append(e)
-                    existing.add(e.text.lower())
+    # Merge with dedup: keep table-extracted entities, add LLM-only ones
+    existing_texts = {e.text.lower() for e in all_entities}
+    for e in llm_entities:
+        if e.text.lower() not in existing_texts:
+            all_entities.append(e)
+            existing_texts.add(e.text.lower())
+
+    existing_rels = {(r.subject.lower(), r.predicate, r.object.lower()) for r in all_relationships}
+    for r in llm_rels:
+        key = (r.subject.lower(), r.predicate, r.object.lower())
+        if key not in existing_rels:
+            all_relationships.append(r)
+            existing_rels.add(key)
 
     return all_entities, all_relationships
 
@@ -444,7 +454,9 @@ async def process_document(
         async with semaphore:
             try:
                 return await asyncio.wait_for(
-                    process_section(section, llm, ontology, doc.title, store),
+                    process_section(
+                        section, llm, ontology, doc.title, store,
+                    ),
                     timeout=settings.section_timeout,
                 )
             except asyncio.TimeoutError:

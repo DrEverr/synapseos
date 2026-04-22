@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     toc_scan_pages: int = 10
     toc_accuracy_threshold: float = 0.60
 
+
     # Entity Resolution
     fuzzy_match_threshold: float = 0.90
 
@@ -119,6 +120,7 @@ class OntologyRegistry:
     def __init__(self, store: InstanceStore | None = None, ontology_name: str = "base") -> None:
         self.entity_types: dict[str, str] = {}
         self.relationship_types: dict[str, str] = {}
+        self._store = store
 
         if store and store.get_active_version_id() is not None:
             # Load from SQLite (post-bootstrap)
@@ -163,6 +165,12 @@ class OntologyRegistry:
         return "\n".join(
             f"- {rtype}: {desc}" for rtype, desc in sorted(self.relationship_types.items())
         )
+
+    def get_contradiction_pairs(self) -> list[list[str]]:
+        """Return contradictory relationship pairs [[A, B], ...] from the store."""
+        if self._store:
+            return self._store.get_contradiction_pairs()
+        return []
 
 
 # ── Singleton ─────────────────────────────────────────────

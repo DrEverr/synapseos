@@ -166,10 +166,16 @@ def _entity_details(canonical: str, etype: str, graph: GraphStore, cfg: GraphToo
 def _tool_related(args: str, graph: GraphStore, cfg: GraphToolsConfig) -> str:
     parts = [p.strip().strip("'\"") for p in args.split(",", 1)]
     name = parts[0] if parts else ""
-    rel_type = parts[1].strip().upper() if len(parts) > 1 else ""
+    rel_type_raw = parts[1].strip().upper() if len(parts) > 1 else ""
+    # Sanitize rel_type: only alphanumeric + underscore allowed as Cypher relationship type
+    import re as _re
+    rel_type = _re.sub(r"[^A-Z0-9_]", "_", rel_type_raw).strip("_") if rel_type_raw else ""
 
     if not name:
         return "Error: RELATED requires at least a name. Usage: RELATED(name) or RELATED(name, REL_TYPE)"
+
+    if rel_type_raw and rel_type != rel_type_raw:
+        logger.debug("rel_type sanitized: %r → %r", rel_type_raw, rel_type)
 
     resolved = _resolve_entity(name, graph, cfg)
     if not resolved:

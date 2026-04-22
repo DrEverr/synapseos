@@ -55,6 +55,8 @@ DOMAIN CONTEXT:
 SAMPLE PAGES:
 {sample_text}
 
+{table_schemas}
+
 CONSTRAINTS:
 - Maximum {max_entity_types} entity types
 - Maximum {max_rel_types} relationship types
@@ -81,6 +83,11 @@ GUIDELINES:
 - Include types for risks, failure conditions, and constraints inherent to this domain
 - Include types for quantifiable thresholds, ranges, and conditions that govern domain behavior
 - Include types for compatibility, substitutability, and exclusion relationships between domain elements
+- CRITICAL for tabular data: if a TABLE SCHEMAS section is present above, treat each NUMERIC column
+  header as a candidate for a HAS_* relationship type (e.g., a column "Weight kg" → HAS_WEIGHT,
+  a column "Flow rate m³/h" → HAS_FLOW_RATE). For IDENTIFIER columns, ensure the entity type
+  description mandates including that column value in the entity text. Tables are often the primary
+  structured data source — if columns don't map to relationship types, the data is lost.
 
 CRITICAL — Avoid shared-node value loss:
 - Entities are stored via MERGE on their text/name. If multiple subjects share the same
@@ -119,6 +126,8 @@ EXISTING RELATIONSHIP TYPES:
 NEW SAMPLE PAGES:
 {sample_text}
 
+{table_schemas}
+
 CONSTRAINTS:
 - Maximum {max_entity_types} entity types total (including existing)
 - Maximum {max_rel_types} relationship types total (including existing)
@@ -153,6 +162,8 @@ RELATIONSHIP TYPES:
 DOCUMENT TOPICS:
 {key_topics}
 
+{table_schemas}
+
 REFINEMENT TASKS:
 1. Remove types that overlap too much — merge them into the more general one
 2. Ensure every entity type can participate in at least one relationship type
@@ -168,7 +179,11 @@ REFINEMENT TASKS:
    relationship type (e.g., APPLIES_TO) that links the outcome back to the entity it belongs to
 8. Verify depth — the ontology should answer "why/how", not just "what": add types for underlying
    mechanisms, risks, quantifiable thresholds, or compatibility constraints if absent and relevant
-9. Check for shared-node value loss: for each entity type that carries a measurable value
+9. Table completeness: if a TABLE SCHEMAS section is present above, verify that each
+   NUMERIC column has a corresponding relationship type. If not, add one. Each row in
+   a data table becomes an entity — its columns must be representable as properties or
+   relationships in the ontology, otherwise that data is lost after extraction.
+10. Check for shared-node value loss: for each entity type that carries a measurable value
    (property, measurement, dosage, etc.), verify the type description states that the entity
    text MUST include the value+unit — not just the property name. Entities are stored via MERGE
    on text, so "viscosity" from 10 products would collapse into one node losing all values.
@@ -363,3 +378,20 @@ RULES:
 5. Keep the total context under 2500 tokens
 6. If there is nothing new to add, return the existing context UNCHANGED
 7. Return the COMPLETE updated context as plain text (NOT JSON)"""
+
+
+CONTRADICTION_SYSTEM = "You are an ontology expert. Your task is to identify contradictory relationship types."
+
+CONTRADICTION_USER = """Given the following relationship types from a domain ontology, identify pairs that are logically contradictory or mutually exclusive — i.e., if relationship A holds between two entities, relationship B cannot hold between the same pair.
+
+RELATIONSHIP TYPES:
+{relationship_types}
+
+Return a JSON array of pairs. Each pair is a two-element array [TYPE_A, TYPE_B].
+Only include pairs where the contradiction is clear and semantically grounded.
+Return [] if no contradictions are found.
+
+Example output:
+[["COMPATIBLE_WITH", "INCOMPATIBLE_WITH"], ["CAUSES", "PROTECTS_AGAINST"]]
+
+Return ONLY the JSON array, nothing else."""
