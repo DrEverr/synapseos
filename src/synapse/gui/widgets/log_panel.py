@@ -6,6 +6,8 @@ by level.
 
 from __future__ import annotations
 
+from html import escape as _escape
+
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QFont, QTextCursor
 from PySide6.QtWidgets import (
@@ -94,6 +96,3 @@ class LogPanel(QDockWidget):
     @Slot(str)
     def _on_level_changed(self, level: str) -> None:
         self._min_level = level
-
-
-from html import escape as _escape

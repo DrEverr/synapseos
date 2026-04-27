@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from synapse.web.deps import get_graph, get_store, get_ontology
+from synapse.web.deps import get_graph, get_ontology, get_store
 
 router = APIRouter(tags=["review"])
 

@@ -829,7 +829,7 @@ def status(
             click.echo(f"\n  {key}  ({len(text)} chars)")
             click.echo(f"    {preview}...")
 
-        click.echo(f"\nTo view full prompt: synapse status --prompt <key>")
+        click.echo("\nTo view full prompt: synapse status --prompt <key>")
         store.close()
         return
 
@@ -1012,7 +1012,7 @@ def _resolve_document_paths(paths: tuple[str, ...]) -> list[str]:
     return unique
 
 
-def _print_tree(sections: list, indent: int = 0) -> None:
+def _print_tree(sections: list[dict[str, Any]], indent: int = 0) -> None:
     for section in sections:
         prefix = " " * indent
         title = section.get("title", "Unknown")

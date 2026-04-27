@@ -744,7 +744,7 @@ class InstanceStore:
         if not row:
             return []
         table_id = row["id"]
-        columns = json.loads(row["columns_json"])
+        json.loads(row["columns_json"])
 
         rows = self._conn.execute(
             "SELECT row_json FROM extracted_table_rows WHERE table_id = ? ORDER BY row_index LIMIT ?",

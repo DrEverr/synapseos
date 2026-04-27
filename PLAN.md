@@ -204,3 +204,316 @@ Using the MANN+HUMMEL filter catalog (24 pages, ~140 size variants, 5 materials,
 | Material duplicates | 4 | 0 |
 | TRANSITION_PIECE variants | 4 (generic) | > 30 (with dimensions) |
 | FILTER_PRODUCT coverage | 8/~15 | > 12/~15 |
+
+---
+
+## Phase 7: Reasoning Agent Fixes (QA Benchmark Findings)
+
+**Priority:** High  
+**Impact:** High — critical bugs that block reliable evaluation and production use  
+**Source:** QA benchmark 2026-04-20, mnh-det vs mnh-hyb, 20 questions  
+**Files:** `src/synapse/chat/reasoning.py`, `src/synapse/chat/enrichment.py`, `src/synapse/storage/instance_store.py`
+
+### 7.1 Fix asyncio timeout — CancelledError not propagating
+
+**Problem:** `asyncio.wait_for(reason_full(...), timeout=180)` does not actually stop reasoning after 180s. Observed runaway questions: Q4 (568s), Q7 (449s), Q14 (761s), Q18 (1202s), Q10-hyb (1553s). Root cause: the HTTP client (`httpx`/`openai`) does not cancel in-flight requests when `asyncio.CancelledError` is sent — it waits for the server response, which can take 100–400s more. After the HTTP response arrives, the exception propagates and the task finally ends.
+
+**Fix:** Use a per-step deadline check inside `reason_full` using `asyncio.timeout()` (Python ≥3.11) around each LLM call, so that cancellation is enforced at the HTTP layer. Also add a hard check at each step boundary.
+
+```python
+# In reason_full() — replace the bare LLM call in the ReAct loop:
+
+import asyncio
+
+for step in range(max_steps):
+    elapsed = time.monotonic() - t0
+    remaining = reasoning_timeout - elapsed
+    if remaining <= 0:
+        timed_out = True
+        break
+
+    try:
+        async with asyncio.timeout(min(remaining, step_timeout)):
+            response = await llm.complete_messages(
+                messages=messages, temperature=0.0, max_tokens=step_max_tokens
+            )
+    except TimeoutError:
+        # asyncio.timeout() raises TimeoutError (not CancelledError) in Python 3.11+
+        logger.warning("Step %d timed out after %.0fs", step + 1, step_timeout)
+        timed_out = True
+        break
+```
+
+Where `step_timeout` defaults to 90s — gives LLM 90s per step, but overall loop is still bounded by `reasoning_timeout`. This makes timeout enforcement happen at the LLM call level, not at the asyncio task level, avoiding the httpx cancellation issue.
+
+**Also fix:** `tests/run_qa_bench.py` should not use `asyncio.wait_for` — instead rely entirely on `reasoning_timeout` inside `reason_full`:
+
+```python
+# Before (doesn't work):
+result = await asyncio.wait_for(reason_full(..., reasoning_timeout=300), timeout=180)
+
+# After (correct):
+result = await reason_full(..., reasoning_timeout=180)
+```
+
+### 7.2 Fix enrichment skipping valid relationships
+
+**Problem:** During reasoning, the enrichment step creates entities and relationships from answers (e.g., `HAS_RATED_AIRFLOW`, `HAS_HOUSING_WEIGHT`, `COMPOSED_OF_MODULES`), but these predicates are not in the ontology — so they are silently dropped. This means every time the agent figures out "GDMI 1800x1800 has 30600 m³/h", this knowledge is lost.
+
+From benchmark logs:
+```
+Skipping relationship with missing type/predicate: predicate='HAS_RATED_AIRFLOW' ...
+Skipping relationship with missing type/predicate: predicate='HAS_HOUSING_WEIGHT' ...
+Skipping relationship with missing type/predicate: predicate='COMPOSED_OF_MODULES' ...
+```
+
+**Fix option A — Add missing predicates to base ontology** (`config/ontologies/base.yaml`):
+```yaml
+relationship_types:
+  HAS_RATED_AIRFLOW: "Relates a housing variant to its rated airflow capacity (m³/h)"
+  HAS_HOUSING_WEIGHT: "Relates a housing variant to its weight in kg"
+  COMPOSED_OF_MODULES: "Relates a housing to the filter module configuration it uses"
+  ACCEPTS_FILTER_DEPTH: "Maximum filter depth (mm) accepted by a housing variant"
+  HAS_LENGTH_VARIANT: "Relates a housing to its length variant (mm)"
+```
+
+**Fix option B — Store as properties instead of relationships:** In `enrichment.py`, when predicate is not in ontology, store the value as a property on the subject entity rather than dropping it:
+
+```python
+if predicate not in valid_rel_types:
+    # Store as property on subject entity instead of relationship
+    graph.update_entity_property(subject, predicate.lower(), obj)
+    continue
+```
+
+Option A is simpler and more consistent. Option B is more resilient but requires a new `update_entity_property` method.
+
+### 7.3 Fix self-assessment on empty answer
+
+**Problem:** When `reason_full` times out before producing an answer, `answer = ""`. The self-assessment step then calls LLM with an empty answer, causing `Self-assessment LLM call failed: Empty input`.
+
+**Fix:** In `reasoning.py`, guard the self-assessment call:
+
+```python
+# Before calling _self_assess:
+if not answer.strip():
+    answer = "(no answer — reasoning timed out or failed)"
+    # Skip self-assessment on empty answers
+    assessment = SelfAssessment(confidence=0.0, reasoning="Timed out or no answer produced")
+else:
+    assessment = await _self_assess(answer, question, actions_log, llm)
+```
+
+### 7.4 Add TABLE_QUERY tool to reasoning agent
+
+**Problem:** 225 size-variant entities are missing from the KG (tables not extracted). Even after re-ingesting MÅTT pages, SQL-table access via `extracted_table_rows` would give the agent direct, reliable access to tabular data without relying on fuzzy graph traversal.
+
+**New tool:** `TABLE_QUERY(product, filter_condition)` — queries `extracted_table_rows` SQLite store.
+
+```python
+# In src/synapse/tools/table_tools.py (new file):
+
+def execute_table_query(args: str, store: InstanceStore) -> str:
+    """Execute TABLE_QUERY(product_prefix, condition) against SQLite table store.
+    
+    Examples:
+      TABLE_QUERY(GDMI, storlek_gdmi='600x600')
+      TABLE_QUERY(GDMI, flode_3400_m3_h > 20000)
+    """
+    # Parse args: first token = table prefix, rest = WHERE condition
+    parts = args.split(",", 1)
+    prefix = parts[0].strip()
+    condition = parts[1].strip() if len(parts) > 1 else None
+    
+    rows = store.query_table(source_doc_pattern=f"%{prefix}%", where=condition, limit=50)
+    if not rows:
+        return f"No table data found for {prefix!r}"
+    return _format_table_rows(rows)
+```
+
+Register in `reason_full` dispatch:
+```python
+elif tool == "TABLE_QUERY":
+    if store:
+        result_text = execute_table_query(args, store)
+    else:
+        result_text = "(TABLE_QUERY not available — no instance store)"
+    messages.append({"role": "user", "content": f"Table data:\n{result_text}"})
+```
+
+Add to system prompt: `TABLE_QUERY(product, condition) — look up raw tabular data (weights, airflows, dimensions) from the product catalog tables.`
+
+---
+
+## Phase 7b: Table-Aware Bootstrap (Ontology Discovery Gap)
+
+**Priority:** High  
+**Impact:** High — fixes the root cause of missing relationship types like `HAS_RATED_AIRFLOW`, `HAS_HOUSING_WEIGHT`, `COMPOSED_OF_MODULES`  
+**Files:** `src/synapse/bootstrap/pipeline.py`, `src/synapse/bootstrap/prompts.py`
+
+### Root Cause
+
+Bootstrap (`synapse init`) sends raw markdown to `ONTOLOGY_DISCOVERY_USER`, including table content. The LLM sees:
+
+```
+| Storlek GDMI | Vikt kg 850/900 | Vikt kg 600/650 | Flöde 3400 m³/h |
+| 300x300      | 26              | 21              | 850             |
+```
+
+It understands the concept "size variant exists" (from narrative text) and generates `HOUSING_SIZE_VARIANT`, but **does not map column headers to relationship types** because the prompt gives no such instruction. The LLM focuses on narrative paragraphs when designing the ontology — table columns are invisible signal.
+
+Result: `HOUSING_SIZE_VARIANT` entity type exists, but `HAS_RATED_AIRFLOW`, `HAS_HOUSING_WEIGHT`, `COMPOSED_OF_MODULES` do not. These predicates are only invented later by the enrichment step (during Q&A), and then silently dropped because they're not in the ontology.
+
+**Two gaps in init:**
+1. **Ontology gap** — column headers not mapped to relationship type candidates
+2. **Structure gap** — bootstrap doesn't distinguish: which column is the primary key (entity text), which are measurable dimensions (relationship types), which are categorical (properties or entity types)
+
+### Fix: `extract_table_schemas()` + TABLE SCHEMAS section in discovery prompt
+
+#### Step 1 — extract_table_schemas() in pipeline.py
+
+```python
+# In src/synapse/bootstrap/pipeline.py
+
+from synapse.extraction.tables import parse_md_tables
+
+def extract_table_schemas(sample_text: str) -> str:
+    """Extract table structures from sample page markdown.
+    
+    Returns a formatted TABLE SCHEMAS summary for injection into
+    the ontology discovery prompt.
+    """
+    import re
+    
+    # Split sample_text into per-page blocks
+    pages = re.split(r'<page_\d+>', sample_text)
+    
+    seen_headers: dict[str, int] = {}  # header_signature → row_count
+    
+    for page_text in pages:
+        tables = parse_md_tables(page_text)
+        for t in tables:
+            if len(t["rows"]) < 2:
+                continue
+            # Signature = tuple of column names
+            sig = " | ".join(t["columns"])
+            seen_headers[sig] = seen_headers.get(sig, 0) + len(t["rows"])
+    
+    if not seen_headers:
+        return ""
+    
+    lines = ["TABLE SCHEMAS FOUND IN DOCUMENTS:"]
+    lines.append("(Each column is a potential property or relationship type)")
+    lines.append("")
+    
+    for sig, row_count in sorted(seen_headers.items(), key=lambda x: -x[1]):
+        cols = sig.split(" | ")
+        lines.append(f"Table ({row_count} rows): {sig}")
+        # Classify columns heuristically
+        for col in cols:
+            col_lower = col.lower()
+            if any(k in col_lower for k in ("vikt", "weight", "kg", "g ", "flöde", "flow", "m³/h", "bredd", "höjd", "width", "height", "length", "längd")):
+                lines.append(f"  → NUMERIC: '{col}' → candidate relationship type, e.g. HAS_{col.upper().replace(' ', '_').replace('/', '_')}")
+            elif any(k in col_lower for k in ("storlek", "size", "typ", "type", "modul", "material", "klass", "class")):
+                lines.append(f"  → IDENTIFIER/CATEGORY: '{col}' → likely entity text or categorical property")
+    
+    lines.append("")
+    lines.append("INSTRUCTION: For EACH numeric column above, define a corresponding relationship type")
+    lines.append("(e.g. HAS_WEIGHT_KG, HAS_RATED_AIRFLOW, HAS_WIDTH_MM). For identifier columns,")
+    lines.append("ensure the entity type description includes them in the entity text (not just properties).")
+    
+    return "\n".join(lines)
+```
+
+#### Step 2 — Inject into discover_ontology()
+
+```python
+# In bootstrap() function, before calling discover_ontology():
+
+table_schemas = extract_table_schemas(sample_text)
+
+ontology = await discover_ontology(
+    sample_text=sample_text,
+    table_schemas=table_schemas,   # NEW
+    domain_context=domain_context,
+    llm=llm,
+    ...
+)
+```
+
+#### Step 3 — Add TABLE SCHEMAS to ONTOLOGY_DISCOVERY_USER prompt
+
+```python
+# In prompts.py — add to ONTOLOGY_DISCOVERY_USER, after SAMPLE PAGES block:
+
+{table_schemas}
+
+# And add to GUIDELINES:
+# - CRITICAL for tabular documents: use the TABLE SCHEMAS section above.
+#   For each NUMERIC column header, create a corresponding relationship type
+#   (e.g. "Vikt kg 850/900" → HAS_WEIGHT_850_900, "Flöde m³/h" → HAS_RATED_AIRFLOW).
+#   For IDENTIFIER columns ("Storlek", "Size"), ensure the entity type description
+#   mandates including that column value in the entity text (not just in properties).
+#   This is the only way multi-row table data is queryable in the knowledge graph.
+```
+
+#### Step 4 — Table-aware ONTOLOGY_REFINEMENT_USER
+
+Add a check in refinement:
+```
+10. Table completeness check: if TABLE SCHEMAS were provided, verify that each
+    numeric column has a corresponding relationship type in the ontology. Add any
+    missing ones. Ensure entity type descriptions for table row entities mandate
+    including the primary key column in entity text.
+```
+
+### Expected result
+
+After this fix, `synapse init` on `filter_housings_sweden.pdf` would generate:
+
+```json
+"relationship_types": {
+  "HAS_RATED_AIRFLOW": "Relates a housing size variant to its rated airflow in m³/h at standard conditions",
+  "HAS_WEIGHT_850_900": "Weight in kg for the 850/900mm length variant",
+  "HAS_WEIGHT_600_650": "Weight in kg for the 600/650mm length variant",
+  "HAS_WIDTH_MM": "Housing width dimension in mm",
+  "HAS_HEIGHT_MM": "Housing height dimension in mm",
+  "COMPOSED_OF_MODULES": "Module configuration (1/4, 1/2, 1/1) of a housing size variant",
+  ...
+}
+```
+
+These types would then be available to both extraction (entities stored with correct properties) and enrichment (Q&A findings stored correctly), closing the loop.
+
+---
+
+## Phase 8: TABLE_QUERY Tool + Re-ingest MÅTT Pages
+
+**Priority:** High  
+**Impact:** High — expected +20pp on QA benchmark for table questions  
+**Depends on:** Phase 1.1 (deterministic table extraction already done in `tables.py`)
+
+### 8.1 Re-ingest all MÅTT pages with deterministic strategy
+
+Run extraction on pages 6, 9, 12, 14, 16, 18, 20, 21, 22 using `table_strategy=deterministic`. Expected: ~225 new size-variant entities + population of `extracted_table_rows` SQLite store.
+
+### 8.2 Implement TABLE_QUERY tool
+
+See Phase 7.4 above. The `extracted_table_rows` store is already written by `process_section_tables()` — only the reasoning agent tool is missing.
+
+### 8.3 Success metric
+
+Re-run QA benchmark after Phase 7 fixes + Phase 8:
+
+| Metric | Current (mnh-det) | Target |
+|--------|-------------------|--------|
+| QA score | 18/40 (45%) | > 30/40 (75%) |
+| Runaway questions | 4/20 | 0/20 |
+| table_lookup accuracy | 67% | > 90% |
+| table_filter accuracy | 17% | > 60% |
+| table_aggregation accuracy | 67% | > 80% |
+
+---
+
+# TODO
+Zapipsywanie sposób dochodzenia do rozwiązania jako cache. Zapisać patterny, żeby później LLM nie tworzył koła od nowa, tylko odpytywał konkretne rzeczy, żeby dość do rozwiązania.

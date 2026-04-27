@@ -5,16 +5,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import secrets
 import os
+import secrets
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from synapse.web.deps import (
     get_graph,
-    get_llm,
     get_ontology,
     get_settings_dep,
     get_store,

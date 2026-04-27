@@ -331,6 +331,7 @@ class ReviewView(QWidget):
     def _show_full_context(self, table_type: str, row: int) -> None:
         """Open a dialog with full untruncated context for the selected item."""
         from PySide6.QtWidgets import QDialog, QDialogButtonBox
+
         from synapse.gui.widgets.chat_bubble import markdown_to_html
 
         if table_type == "entity":

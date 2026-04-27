@@ -14,14 +14,13 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -482,6 +481,7 @@ class GraphInspectorView(QWidget):
     def _on_tree_item_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
         """Open a dialog showing section details and cached text (rendered as Markdown)."""
         from PySide6.QtWidgets import QDialog, QDialogButtonBox
+
         from synapse.gui.widgets.chat_bubble import markdown_to_html
 
         title = item.text(0)

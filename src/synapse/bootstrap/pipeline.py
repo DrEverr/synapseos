@@ -38,7 +38,6 @@ from synapse.config import Settings
 from synapse.extraction.tables import parse_md_tables
 from synapse.llm.client import LLMClient
 from synapse.parsers import extract_pages
-from synapse.parsers.pdf import pages_to_tagged_text
 from synapse.storage.instance_store import InstanceStore
 
 logger = logging.getLogger(__name__)
@@ -150,7 +149,7 @@ def extract_table_schemas(sample_text: str) -> str:
 async def analyze_domain(
     sample_text: str,
     llm: LLMClient,
-) -> dict:
+) -> dict[str, Any]:
     """Step 1: Identify the domain, language, and key topics from sample pages."""
     result = await llm.complete_json_lenient(
         system=DOMAIN_ANALYSIS_SYSTEM,
@@ -171,7 +170,7 @@ async def discover_ontology(
     existing_entity_types: dict[str, str] | None = None,
     existing_relationship_types: dict[str, str] | None = None,
     table_schemas: str = "",
-) -> dict:
+) -> dict[str, Any]:
     """Step 2: Discover entity types and relationship types from document samples."""
     if existing_entity_types:
         # Incremental discovery
@@ -215,7 +214,7 @@ async def refine_ontology(
     max_entity_types: int = 15,
     max_rel_types: int = 20,
     table_schemas: str = "",
-) -> dict:
+) -> dict[str, Any]:
     """Step 3: Refine and finalize the discovered ontology."""
     result = await llm.complete_json_lenient(
         system=ONTOLOGY_REFINEMENT_SYSTEM,
@@ -377,7 +376,7 @@ async def bootstrap(
     pdf_paths: list[str],
     settings: Settings,
     store: InstanceStore,
-) -> dict:
+) -> dict[str, Any]:
     """Run the full bootstrap pipeline.
 
     Takes a batch of PDF documents, discovers the domain ontology,

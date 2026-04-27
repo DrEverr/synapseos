@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
-    QMenuBar,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -31,12 +30,12 @@ from PySide6.QtWidgets import (
 from synapse.gui.bridge import SynapseBridge
 from synapse.gui.theme import apply_theme
 from synapse.gui.views.activity import ActivityView
-from synapse.gui.views.review import ReviewView
 from synapse.gui.views.bootstrap import BootstrapView
 from synapse.gui.views.chat import ChatView
 from synapse.gui.views.dashboard import DashboardView
 from synapse.gui.views.graph import GraphInspectorView
 from synapse.gui.views.ingest import IngestView
+from synapse.gui.views.review import ReviewView
 from synapse.gui.views.status import StatusView
 from synapse.gui.views.versions import VersionsView
 from synapse.gui.widgets.log_panel import LogPanel

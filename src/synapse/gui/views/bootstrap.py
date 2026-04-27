@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QGroupBox,
@@ -12,16 +12,16 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPushButton,
     QPlainTextEdit,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from synapse.gui.bridge import SynapseBridge
 from synapse.gui.widgets.file_picker import FilePicker
-from synapse.gui.widgets.safe_log import SafeViewLogHandler
 from synapse.gui.widgets.progress import StepProgress
+from synapse.gui.widgets.safe_log import SafeViewLogHandler
 from synapse.gui.workers import AsyncWorker
 
 logger = logging.getLogger(__name__)

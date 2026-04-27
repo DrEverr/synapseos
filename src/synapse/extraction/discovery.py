@@ -14,7 +14,6 @@ from typing import Any
 from synapse.config import OntologyRegistry
 from synapse.llm.client import LLMClient
 from synapse.models.document import Document
-from synapse.parsers.pdf import pages_to_tagged_text
 from synapse.storage.instance_store import InstanceStore
 
 logger = logging.getLogger(__name__)

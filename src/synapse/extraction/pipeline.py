@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
-
 from collections import defaultdict
+from pathlib import Path
 
 from synapse.bootstrap.prompts import (
     DOMAIN_KNOWLEDGE_UPDATE_SYSTEM,
@@ -17,7 +16,6 @@ from synapse.extraction.discovery import discover_ontology_gaps
 from synapse.extraction.entities import extract_entities
 from synapse.extraction.relationships import extract_relationships
 from synapse.llm.client import LLMClient
-from synapse.llm.templates import safe_format
 from synapse.models.document import Document, Section
 from synapse.models.entity import Entity
 from synapse.models.relationship import Relationship
@@ -540,7 +538,7 @@ async def ingest_files(
     settings: Settings,
     reset: bool = False,
     dry_run: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """Ingest multiple PDF files through the full pipeline."""
     store = settings.get_instance_store()
     ontology = OntologyRegistry(store=store, ontology_name=settings.ontology)

@@ -6,8 +6,8 @@ Searches across ALL text-like properties and deduplicates by node identity.
 
 from __future__ import annotations
 
-import re
 import logging
+import re
 
 from synapse.storage.graph import GraphStore
 from synapse.tools.config import GraphToolsConfig

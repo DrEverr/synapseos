@@ -11,7 +11,6 @@ import logging
 from pathlib import Path
 
 import yaml
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from synapse.storage.instance_store import InstanceStore

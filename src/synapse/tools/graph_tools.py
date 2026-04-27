@@ -11,7 +11,7 @@ import logging
 
 from synapse.storage.graph import GraphStore
 from synapse.tools.config import GraphToolsConfig, discover_config
-from synapse.tools.search import smart_search, normalize_search_term
+from synapse.tools.search import normalize_search_term, smart_search
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,11 @@ def _tool_details(name: str, graph: GraphStore, cfg: GraphToolsConfig) -> str:
         return "Error: DETAILS requires a name argument."
 
     # Find ALL entities whose name contains the normalized input (no keyword fallback)
-    from synapse.tools.search import normalize_search_term, _multi_field_search, _discover_name_fields
+    from synapse.tools.search import (
+        _discover_name_fields,
+        _multi_field_search,
+        normalize_search_term,
+    )
     normalized = normalize_search_term(name)
     if not normalized:
         return "Error: DETAILS requires a name argument."

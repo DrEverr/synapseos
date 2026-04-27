@@ -17,7 +17,6 @@ from typing import Any, Callable, Coroutine
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-
 # ---------------------------------------------------------------------------
 # Signal-only QObject (signals must live on a QObject, not directly on QThread)
 # ---------------------------------------------------------------------------

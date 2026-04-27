@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from synapse.web.deps import get_graph, get_ontology, get_store, get_text_cache
+from synapse.web.deps import get_graph, get_ontology
 
 router = APIRouter(tags=["graph"])
 

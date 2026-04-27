@@ -7,9 +7,9 @@ code blocks, inline code, lists (ordered/unordered), tables, and links.
 from __future__ import annotations
 
 import re
+from html import escape as _escape
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QLabel,
     QVBoxLayout,
@@ -33,7 +33,6 @@ def markdown_to_html(text: str) -> str:
     html_parts: list[str] = []
     i = 0
     in_code_block = False
-    code_lang = ""
     code_lines: list[str] = []
 
     while i < len(lines):
@@ -43,7 +42,7 @@ def markdown_to_html(text: str) -> str:
         if line.strip().startswith("```"):
             if not in_code_block:
                 in_code_block = True
-                code_lang = line.strip()[3:].strip()
+                line.strip()[3:].strip()
                 code_lines = []
                 i += 1
                 continue
@@ -133,7 +132,7 @@ def markdown_to_html(text: str) -> str:
             while i < len(lines) and lines[i].strip().startswith(">"):
                 quote_lines.append(re.sub(r"^>\s?", "", lines[i].strip()))
                 i += 1
-            quote_html = "<br>".join(_inline_format(l) for l in quote_lines)
+            quote_html = "<br>".join(_inline_format(line) for line in quote_lines)
             html_parts.append(
                 f'<blockquote style="border-left:3px solid #7c5cfc; '
                 f'padding-left:10px; margin:4px 0; color:#8e8ea0;">'
@@ -222,10 +221,6 @@ def _render_table(lines: list[str]) -> str:
         html += "</tr>"
     html += "</tbody></table>"
     return html
-
-
-from html import escape as _escape
-
 
 # -- Chat bubble widget ------------------------------------------------------
 

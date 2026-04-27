@@ -57,7 +57,7 @@ def export_session_to_markdown(session_ref: str, store: InstanceStore) -> str:
 
         # Answer
         answer = ep.get("answer", "")
-        lines.append(f"**A:**")
+        lines.append("**A:**")
         lines.append("")
         lines.append(answer)
         lines.append("")
@@ -117,18 +117,18 @@ def export_session_to_markdown(session_ref: str, store: InstanceStore) -> str:
                 obs = action.get("observation", "")
                 lines.append(f"**Step {j}: {tool}**")
                 if args:
-                    lines.append(f"```")
+                    lines.append("```")
                     lines.append(args)
-                    lines.append(f"```")
+                    lines.append("```")
                 if obs:
                     # Truncate very long observations for readability
                     obs_str = str(obs)
                     if len(obs_str) > 1000:
                         obs_str = obs_str[:1000] + "\n\n... (truncated)"
-                    lines.append(f"Result:")
-                    lines.append(f"```")
+                    lines.append("Result:")
+                    lines.append("```")
                     lines.append(obs_str)
-                    lines.append(f"```")
+                    lines.append("```")
                 lines.append("")
             lines.append("</details>")
             lines.append("")
@@ -214,7 +214,7 @@ def export_session_to_pdf(
         spaceAfter=6,
     )
 
-    story: list = []
+    story: list[Any] = []
 
     # Title
     name = session.get("name") or session["session_id"][:8]

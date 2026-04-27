@@ -8,7 +8,6 @@ from __future__ import annotations
 import logging
 import re
 
-from synapse.extraction.entities import detect_tables
 from synapse.models.document import Section
 from synapse.models.entity import Entity
 from synapse.models.relationship import Relationship

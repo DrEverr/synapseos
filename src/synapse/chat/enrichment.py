@@ -7,8 +7,8 @@ from typing import Any
 
 from synapse.chat.prompts import ENRICHMENT_SYSTEM, ENRICHMENT_USER
 from synapse.config import OntologyRegistry
-from synapse.llm.templates import safe_format
 from synapse.llm.client import LLMClient
+from synapse.llm.templates import safe_format
 from synapse.models.entity import Entity
 from synapse.models.relationship import Relationship
 from synapse.resolution.linker import are_same_entity

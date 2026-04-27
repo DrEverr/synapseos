@@ -7,7 +7,7 @@ import logging
 import secrets
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from synapse.config import OntologyRegistry, Settings, get_settings

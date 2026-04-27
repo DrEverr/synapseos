@@ -188,7 +188,7 @@ class GraphStore:
         except Exception as e:
             logger.warning("Graph reset failed: %s", e)
 
-    def query(self, cypher: str, params: dict | None = None) -> list:
+    def query(self, cypher: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """Execute a Cypher query and return the result rows."""
         result = self._graph.query(cypher, params=params or {})
         return [list(row) for row in result.result_set]
@@ -217,7 +217,7 @@ class GraphStore:
         )
         return {row[0]: row[1] for row in result if row[0]}
 
-    def get_all_triples(self, limit: int = 100) -> list:
+    def get_all_triples(self, limit: int = 100) -> list[dict[str, Any]]:
         result = self.query(
             "MATCH (a)-[r]->(b) "
             "WHERE NOT a:Document AND NOT a:Section AND NOT b:Document AND NOT b:Section "
@@ -225,7 +225,7 @@ class GraphStore:
         )
         return result
 
-    def find_duplicates(self) -> list:
+    def find_duplicates(self) -> list[dict[str, Any]]:
         result = self.query(
             "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
             "WITH n.canonical_name AS name, labels(n)[0] AS label, count(*) AS cnt "
@@ -233,7 +233,7 @@ class GraphStore:
         )
         return result
 
-    def get_documents(self) -> list[dict]:
+    def get_documents(self) -> list[dict[str, Any]]:
         result = self.query(
             "MATCH (d:Document) RETURN d.id, d.filename, d.title, d.page_count, d.tree_structure_json"
         )
@@ -248,7 +248,7 @@ class GraphStore:
             for row in result
         ]
 
-    def search_entities(self, query: str, limit: int = 20) -> list:
+    def search_entities(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         return self.query(
             "MATCH (n) WHERE NOT n:Document AND NOT n:Section "
             "AND toLower(n.canonical_name) CONTAINS toLower($query) "
@@ -274,7 +274,7 @@ class GraphStore:
             "ORDER BY labels(n)[0], n.canonical_name"
         )
 
-    def get_graph_health(self, ontology_types: dict[str, str] | None = None) -> dict:
+    def get_graph_health(self, ontology_types: dict[str, str] | None = None) -> dict[str, Any]:
         """Return a health report for the knowledge graph."""
         node_count = self.get_node_count()
         edge_count = self.get_edge_count()
@@ -488,7 +488,7 @@ class GraphStore:
         logger.info("Deleted %d entities", count)
         return count
 
-    def _section_to_dict(self, section: Any) -> dict:
+    def _section_to_dict(self, section: Any) -> dict[str, Any]:
         """Recursively convert a Section to a serializable dict."""
         return {
             "title": section.title,

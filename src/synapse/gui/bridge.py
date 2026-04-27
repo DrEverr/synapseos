@@ -84,7 +84,7 @@ class SynapseBridge:
 
     # -- Dashboard data -------------------------------------------------------
 
-    def get_dashboard_data(self) -> dict:
+    def get_dashboard_data(self) -> dict[str, Any]:
         """Collect data for the dashboard view."""
         store = self.get_store()
         data: dict = {

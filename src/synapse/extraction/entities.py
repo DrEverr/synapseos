@@ -76,7 +76,7 @@ def detect_tables(text: str) -> list[dict]:
         # Look for header row
         if _TABLE_ROW_RE.match(line):
             header_line = i
-            col_count = line.count("|") - 1
+            line.count("|") - 1
             # Next line must be separator
             if i + 1 < len(lines) and _TABLE_SEP_RE.match(lines[i + 1].strip()):
                 sep_line = i + 1

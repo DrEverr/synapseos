@@ -35,7 +35,12 @@ from synapse.chat.retrieval import get_section_summaries, get_section_text, tree
 from synapse.config import OntologyRegistry
 from synapse.llm.client import LLMClient
 from synapse.llm.templates import safe_format
-from synapse.models.reasoning import ChallengeResult, EnrichmentResult, ReasoningResult, SelfAssessment
+from synapse.models.reasoning import (
+    ChallengeResult,
+    EnrichmentResult,
+    ReasoningResult,
+    SelfAssessment,
+)
 from synapse.storage.graph import GraphStore
 from synapse.storage.instance_store import InstanceStore
 from synapse.storage.text_cache import TextCache
@@ -1049,7 +1054,7 @@ async def reason_full(
             )
 
             if verbose and assessment:
-                print(f"\n--- Post-Revision Assessment ---")
+                print("\n--- Post-Revision Assessment ---")
                 print(f"Confidence: {assessment.confidence:.2f}  Groundedness: {assessment.groundedness:.2f}")
 
     # Phase 4: Enrichment — extract new knowledge from the answer
